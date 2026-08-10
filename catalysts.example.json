@@ -1,0 +1,18 @@
+{
+  "_comment": "Catalysts are supplied by you, never inferred by the scanner. DATA_SOURCES.md requires a named source and an event date for every material catalyst. 'binary' triggers a scoring penalty for unhedged event risk.",
+  "HAL": {
+    "present": true,
+    "note": "Q1 FY27 results",
+    "date": "2026-08-12",
+    "source": "NSE board meeting intimation",
+    "verified": true,
+    "binary": true
+  },
+  "TCS": {
+    "present": false,
+    "note": "no scheduled event in the horizon",
+    "source": "NSE corporate announcements",
+    "verified": true,
+    "binary": false
+  }
+}

@@ -1,0 +1,14 @@
+# Core — required
+pandas>=2.0
+numpy>=1.24
+
+# Free data provider (EOD NSE via .NS tickers). Start here.
+yfinance>=0.2.40
+
+# Optional: Zerodha Kite Connect — intraday bars + real option chain.
+# Paid subscription. Uncomment after you have an app on the Kite developer console.
+# kiteconnect>=4.2.0
+
+# Optional: test runner. The suite also runs standalone:
+#   PYTHONPATH=. python3 tests/test_offline.py
+# pytest>=7.0
