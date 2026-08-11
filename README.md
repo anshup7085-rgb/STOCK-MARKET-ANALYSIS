@@ -30,6 +30,7 @@ Full installation, provider setup and the daily Kite token flow: **`SETUP.md`**.
 | `SESSION_CHECKLIST.md` | The order to work in, per session |
 | `OUTPUT_TEMPLATE.md` | The report shape |
 | `SETUP.md` | Install, providers, credentials, known limitations |
+| `ROADMAP.md` | Current state, the evidence gates before live capital, kill criteria |
 
 ## Code layout
 
