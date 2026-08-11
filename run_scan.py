@@ -24,6 +24,7 @@ import sys
 from dataclasses import asdict
 from datetime import datetime, time
 
+from market.charges import SCHEDULES, trade_economics
 from market.config import IST, MARKET_CLOSE, MARKET_OPEN, settings
 from market.indicators import build_snapshot, relative_strength
 from market.levels import build_levels, size_position
@@ -35,6 +36,9 @@ from market.universe import (
     classify_regime,
     liquidity_check,
 )
+
+
+NOTIONAL = 100_000.0    # basis for cost arithmetic when equity is unknown
 
 
 def market_status(now: datetime) -> dict:
@@ -82,6 +86,12 @@ def main() -> int:
     ap.add_argument("--catalysts", default=None, help="path to catalysts JSON")
     ap.add_argument("--json", dest="json_out", default=None)
     ap.add_argument("--min-score", type=float, default=None)
+    ap.add_argument("--equity", type=float, default=None,
+                    help="account equity; overrides ACCOUNT_EQUITY for this run")
+    ap.add_argument("--segment", default="delivery", choices=["delivery", "intraday"],
+                    help="charge schedule to apply")
+    ap.add_argument("--slippage", type=float, default=0.05,
+                    help="assumed slippage %% per leg, applied against you")
     args = ap.parse_args()
 
     now = datetime.now(IST)
@@ -194,10 +204,11 @@ def main() -> int:
             event_note=cat.get("note", ""),
         )
 
+        equity = args.equity if args.equity is not None else settings.account_equity
         sizing = (
             size_position(
                 levels,
-                settings.account_equity,
+                equity,
                 settings.risk_per_trade_pct,
                 settings.max_single_position_pct,
                 snap.median_turnover_cr,
@@ -205,6 +216,30 @@ def main() -> int:
             if levels
             else None
         )
+
+        # Net economics. Without equity there is no real quantity, so the
+        # arithmetic runs on a Rs1,00,000 notional and is labelled as such —
+        # the ratios and the breakeven win rate hold either way, the rupee
+        # figures scale.
+        econ = None
+        if levels:
+            if sizing and sizing.quantity:
+                qty, basis = sizing.quantity, "position size from risk budget"
+            else:
+                qty = int(NOTIONAL / levels.reference_price)
+                basis = f"Rs{NOTIONAL:,.0f} notional (no account equity supplied)"
+            econ = trade_economics(
+                levels.reference_price, levels.stop, levels.target2, qty,
+                segment=args.segment, slippage_pct=args.slippage,
+            )
+            if econ:
+                econ_d = asdict(econ)
+                econ_d["quantity_basis"] = basis
+                econ_d["expected_value_by_win_rate"] = {
+                    f"{p}%": round(econ.expected_value_at(p), 2)
+                    for p in (30, 40, 50, 60, 70)
+                }
+                econ = econ_d
 
         report["candidates"].append(
             {
@@ -217,6 +252,7 @@ def main() -> int:
                 "snapshot": asdict(snap),
                 "levels": asdict(levels) if levels else None,
                 "sizing": asdict(sizing) if sizing else None,
+                "economics": econ,
                 "data": {
                     "source": bars.source,
                     "freshness": bars.freshness,
@@ -224,6 +260,23 @@ def main() -> int:
                     "staleness_days": round(staleness or 0, 2),
                 },
             }
+        )
+
+    sched = SCHEDULES[args.segment]
+    report["cost_model"] = {
+        "schedule": sched.name,
+        "segment": args.segment,
+        "slippage_pct_per_leg": args.slippage,
+        "rates_verified": not sched.unverified(),
+        "note": (
+            "Statutory rates change and brokerage varies by broker and plan. These "
+            "are published-retail defaults, not a contract note. Verify before "
+            "trusting any rupee figure."
+        ),
+    }
+    if sched.unverified():
+        report["data_limitations"].append(
+            "Charge rates are UNVERIFIED defaults — net returns below are indicative."
         )
 
     report["candidates"].sort(key=lambda c: c["score"], reverse=True)

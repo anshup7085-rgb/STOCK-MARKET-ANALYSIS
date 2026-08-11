@@ -12,6 +12,7 @@ import numpy as np
 import pandas as pd
 
 from market.backtest import _spearman, run_backtest, simulate
+from market.charges import DELIVERY, INTRADAY, round_trip_costs, trade_economics
 from market.config import Thresholds
 from market.indicators import atr, build_snapshot, ema, pivot_highs, rsi
 from market.levels import build_levels, size_position
@@ -289,6 +290,86 @@ def test_backtest_runs_and_stays_causal():
 def test_spearman_detects_direction():
     assert _spearman([1, 2, 3, 4, 5], [1, 2, 3, 4, 5]) > 0.99
     assert _spearman([1, 2, 3, 4, 5], [5, 4, 3, 2, 1]) < -0.99
+
+
+# -- charges and net economics ---------------------------------------------
+
+def test_delivery_stt_is_both_sides_intraday_is_sell_only():
+    """The single biggest cost line, and it is not symmetric across segments."""
+    d = round_trip_costs(1000.0, 1100.0, 100, DELIVERY)
+    i = round_trip_costs(1000.0, 1100.0, 100, INTRADAY)
+    # delivery: 0.1% of 100k buy + 0.1% of 110k sell
+    assert abs(d.stt - (100_000 * 0.001 + 110_000 * 0.001)) < 0.01
+    # intraday: 0.025% of the sell leg only
+    assert abs(i.stt - (110_000 * 0.00025)) < 0.01
+    assert i.stt < d.stt
+
+
+def test_gst_applies_to_brokerage_not_to_stt():
+    """GST is on brokerage + exchange + SEBI. Charging it on STT is a classic slip."""
+    c = round_trip_costs(1000.0, 1100.0, 100, INTRADAY)
+    expected_gst = (c.brokerage + c.exchange_txn + c.sebi) * 0.18
+    assert abs(c.gst - expected_gst) < 0.01
+
+
+def test_brokerage_cap_bites_on_a_large_order():
+    small = round_trip_costs(100.0, 110.0, 100, INTRADAY)      # 10k turnover
+    large = round_trip_costs(10_000.0, 11_000.0, 100, INTRADAY)  # 1,000k turnover
+    assert small.brokerage < 40.0
+    assert abs(large.brokerage - 40.0) < 0.01, "Rs20/order cap should bind on both legs"
+
+
+def test_costs_make_net_worse_than_gross():
+    e = trade_economics(1000.0, 950.0, 1150.0, 100, segment="delivery")
+    assert e.net_profit_at_target < e.gross_profit_at_target
+    assert abs(e.net_loss_at_stop) > abs(e.gross_loss_at_stop)
+    assert e.net_reward_risk < e.gross_reward_risk
+
+
+def test_breakeven_win_rate_matches_its_own_definition():
+    """p = |L| / (W + |L|) — the number the whole plan hangs on."""
+    e = trade_economics(1000.0, 950.0, 1150.0, 100, segment="delivery")
+    p = e.breakeven_win_rate_pct / 100.0
+    ev = p * e.net_profit_at_target - (1 - p) * abs(e.net_loss_at_stop)
+    # The published rate is rounded to 0.1%, which is worth +/-0.0005 of the
+    # win/loss spread in EV. Tolerance tracks the position, not a flat rupee.
+    tol = 0.001 * (e.net_profit_at_target + abs(e.net_loss_at_stop))
+    assert abs(ev) < tol, f"at the breakeven win rate EV must be ~0, got {ev}"
+
+
+def test_expected_value_is_zero_at_breakeven_and_rises_above():
+    e = trade_economics(1000.0, 950.0, 1150.0, 100, segment="delivery")
+    be = e.breakeven_win_rate_pct
+    tol = 0.001 * (e.net_profit_at_target + abs(e.net_loss_at_stop))
+    assert abs(e.expected_value_at(be)) < tol
+    assert e.expected_value_at(be + 10) > 0
+    assert e.expected_value_at(be - 10) < 0
+
+
+def test_tiny_position_is_flagged_as_eaten_by_costs():
+    """Fixed charges dominate a small position — the model must say so."""
+    e = trade_economics(100.0, 95.0, 115.0, 5, segment="delivery")
+    assert any("too small" in w for w in e.warnings), e.warnings
+
+
+def test_unverified_rates_are_declared():
+    """RATE ACCURACY: defaults ship unverified and must announce it."""
+    e = trade_economics(1000.0, 950.0, 1150.0, 100)
+    assert not e.schedule_verified
+    assert any("UNVERIFIED" in w for w in e.warnings)
+
+
+def test_slippage_is_applied_against_the_trade_both_ways():
+    clean = trade_economics(1000.0, 950.0, 1150.0, 100, slippage_pct=0.0)
+    slipped = trade_economics(1000.0, 950.0, 1150.0, 100, slippage_pct=0.5)
+    assert slipped.net_profit_at_target < clean.net_profit_at_target
+    assert abs(slipped.net_loss_at_stop) > abs(clean.net_loss_at_stop)
+
+
+def test_short_economics_do_not_silently_invert():
+    e = trade_economics(1000.0, 1050.0, 900.0, 100, segment="intraday")
+    assert e.net_profit_at_target > 0, "a short to a lower target must profit"
+    assert e.net_loss_at_stop < 0
 
 
 if __name__ == "__main__":

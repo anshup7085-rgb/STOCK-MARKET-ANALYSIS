@@ -34,6 +34,7 @@ python run_scan.py --provider kite                  # live intraday + real OI
 python run_scan.py --catalysts catalysts.json       # score the catalyst block
 python run_scan.py --provider mock                  # wiring check, no feed
 python run_backtest.py --symbols TCS INFY HAL       # does the score predict?
+python run_scan.py --equity 500000 --json scans/t.json && python render_plan.py scans/t.json
 ```
 
 `run_scan.py` emits JSON containing, per candidate: the full indicator
@@ -75,6 +76,14 @@ how you source it.
   was measured to confirmed swing highs the price would actually have to clear.
   `"r-multiple"` means the chart offered nothing overhead and the ratio is
   assumed, not measured — say which one you are reporting.
+- **Quote net, not gross.** Every candidate carries an `economics` block with
+  costs, net R:R and the breakeven win rate. Report the net figure; a gross R:R
+  that clears the floor and a net one that doesn't is exactly the case the reader
+  needs to see.
+- **Never state an expected return without naming the win rate.** Expected value
+  is a function of a win rate the system has not measured. Give the breakeven win
+  rate — that is arithmetic — and the EV table across assumed rates. Presenting a
+  single expected return as if it were known is a forecast in disguise.
 - **The score is unvalidated until `run_backtest.py` says otherwise.** It ranks;
   whether it ranks *usefully* is an empirical question with an answer, and the
   harness exists to produce it. Do not describe a high score as evidence of edge

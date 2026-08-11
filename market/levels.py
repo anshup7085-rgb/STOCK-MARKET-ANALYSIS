@@ -246,7 +246,10 @@ def size_position(
                 f"Rs{median_turnover_cr:.0f}cr — exiting on a bad day will move the price."
             )
 
-    warnings.append("Charges, STT and slippage are NOT deducted from this max loss.")
+    warnings.append(
+        "This max loss is gross. Charges, STT and slippage are modelled separately "
+        "in market/charges.py — read the economics block for the net figure."
+    )
 
     return PositionSize(
         quantity=qty,
