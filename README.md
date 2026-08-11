@@ -11,9 +11,10 @@ python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env
 
-PYTHONPATH=. python3 tests/test_offline.py          # 16 tests, no network
+PYTHONPATH=. python3 tests/test_offline.py          # 26 tests, no network
 python run_scan.py --provider mock --symbols TCS INFY HAL   # wiring check
 python run_scan.py --symbols RELIANCE TCS HAL --json scans/today.json
+python run_backtest.py --symbols RELIANCE TCS HAL   # does the score predict?
 ```
 
 Full installation, provider setup and the daily Kite token flow: **`SETUP.md`**.
@@ -34,14 +35,36 @@ Full installation, provider setup and the daily Kite token flow: **`SETUP.md`**.
 
 ```
 run_scan.py              CLI — walks the checklist, emits JSON
+run_backtest.py          CLI — walk-forward test of whether the score predicts
 market/config.py         thresholds and settings; secrets read from env only
-market/indicators.py     causal indicators (no lookahead — tested)
-market/levels.py         ATR-based entry/stop/targets and position sizing
-market/score.py          transparent 0-100 model with per-component reasoning
+market/indicators.py     causal indicators + confirmed swing structure
+market/levels.py         ATR stops, structure-based targets, position sizing
+market/score.py          transparent 0-85 model with per-component reasoning
+market/backtest.py       path simulation, score-band stats, rank correlation
 market/universe.py       candidate list, liquidity gate, regime classifier
 market/providers/        yfinance (free, EOD) | kite (paid, intraday + OI) | mock
 reports/                 rendered session reports
 ```
+
+## How the score is built
+
+Six components, 85 points, each returning its own reasoning string:
+
+| Component | Points | Source |
+|---|---:|---|
+| Trend structure | 20 | EMA stack, position vs 52-week high |
+| Momentum / relative strength | 15 | RSI, 20-day return, excess return vs benchmark |
+| Volume / liquidity | 10 | Median turnover, volume vs 20-day average |
+| Catalyst | 15 | `catalysts.json` — supplied by you, never inferred |
+| Derivatives / positioning | 10 | Open interest (Kite only) |
+| Risk / reward | 15 | Measured to confirmed swing structure |
+
+Market regime is **not** one of them. It is a property of the market, so it
+returns the same value for every candidate and cannot rank anything — it is
+applied instead as a deduction to every candidate equally, which leaves the
+ranking untouched but can push a whole shortlist below the floor in a hostile
+tape. Penalties (stale data, wide ATR, gaps, thin history, binary events) cap at
+15 points.
 
 ## Two things to understand before trusting an output
 

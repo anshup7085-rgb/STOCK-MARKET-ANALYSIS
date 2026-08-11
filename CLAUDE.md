@@ -33,6 +33,7 @@ python run_scan.py --symbols TCS INFY HAL           # targeted
 python run_scan.py --provider kite                  # live intraday + real OI
 python run_scan.py --catalysts catalysts.json       # score the catalyst block
 python run_scan.py --provider mock                  # wiring check, no feed
+python run_backtest.py --symbols TCS INFY HAL       # does the score predict?
 ```
 
 `run_scan.py` emits JSON containing, per candidate: the full indicator
@@ -70,6 +71,14 @@ how you source it.
   say so plainly rather than promoting the least-bad name.
 - **Catalysts are inputs, not inferences.** If `catalysts.json` is absent, the
   catalyst block stays unscored. Do not guess an event from a headline.
+- **Read `target_basis` before quoting an R:R.** `"structure"` means the reward
+  was measured to confirmed swing highs the price would actually have to clear.
+  `"r-multiple"` means the chart offered nothing overhead and the ratio is
+  assumed, not measured — say which one you are reporting.
+- **The score is unvalidated until `run_backtest.py` says otherwise.** It ranks;
+  whether it ranks *usefully* is an empirical question with an answer, and the
+  harness exists to produce it. Do not describe a high score as evidence of edge
+  before that number exists for the feed in question.
 
 ### Execution
 

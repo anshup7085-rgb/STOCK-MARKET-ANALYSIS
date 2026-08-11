@@ -9,7 +9,7 @@ forward-filled from the future.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 import pandas as pd
@@ -61,6 +61,81 @@ def rolling_low(df: pd.DataFrame, period: int) -> pd.Series:
     return df["low"].rolling(period, min_periods=period).min()
 
 
+def pivot_highs(df: pd.DataFrame, left: int = 3, right: int = 3) -> list[float]:
+    """
+    Confirmed swing highs, in chronological order.
+
+    A pivot at bar i is only reported once `right` bars have printed after it, so
+    at the final bar the most recent `right` bars can never produce one. That
+    delay is the whole point: a pivot 'confirmed' by bars that have not happened
+    yet is lookahead, and it would silently poison every backtest built on it.
+
+    Ties resolve to the earliest bar, so a flat double top reports once.
+    """
+    h = df["high"].to_numpy(dtype=float)
+    n = len(h)
+    out: list[float] = []
+    for i in range(left, n - right):
+        w = h[i - left : i + right + 1]
+        if int(w.argmax()) == left:
+            out.append(float(h[i]))
+    return out
+
+
+def pivot_lows(df: pd.DataFrame, left: int = 3, right: int = 3) -> list[float]:
+    """Mirror of pivot_highs. Same confirmation delay, same reason."""
+    lo = df["low"].to_numpy(dtype=float)
+    n = len(lo)
+    out: list[float] = []
+    for i in range(left, n - right):
+        w = lo[i - left : i + right + 1]
+        if int(w.argmin()) == left:
+            out.append(float(lo[i]))
+    return out
+
+
+def _cluster(levels: list[float], min_sep: float, ascending: bool) -> list[float]:
+    """
+    Collapse levels sitting within `min_sep` of each other into one.
+
+    Price rarely respects a single tick; three swing highs a rupee apart are one
+    ceiling, not three targets. The survivor is the one price meets FIRST, which
+    is the conservative choice for a target and the honest one for a stop.
+    """
+    ordered = sorted(levels, reverse=not ascending)
+    kept: list[float] = []
+    for p in ordered:
+        if not kept or abs(p - kept[-1]) >= min_sep:
+            kept.append(p)
+    return kept
+
+
+def resistance_above(
+    df: pd.DataFrame, close: float, atr_val: float | None, min_sep_atr: float = 0.5
+) -> list[float]:
+    """Confirmed swing highs above price, nearest first, plus the 52-week high."""
+    raw = [p for p in pivot_highs(df) if p > close]
+    if len(df) >= 20:
+        h52 = float(df["high"].tail(252).max())
+        if h52 > close:
+            raw.append(h52)
+    sep = (atr_val or 0.0) * min_sep_atr
+    return _cluster(raw, sep, ascending=True)
+
+
+def support_below(
+    df: pd.DataFrame, close: float, atr_val: float | None, min_sep_atr: float = 0.5
+) -> list[float]:
+    """Confirmed swing lows below price, nearest first, plus the 52-week low."""
+    raw = [p for p in pivot_lows(df) if p < close]
+    if len(df) >= 20:
+        l52 = float(df["low"].tail(252).min())
+        if l52 < close:
+            raw.append(l52)
+    sep = (atr_val or 0.0) * min_sep_atr
+    return _cluster(raw, sep, ascending=False)
+
+
 def relative_strength(close: pd.Series, bench_close: pd.Series, period: int = 60) -> float | None:
     """
     Excess return vs a benchmark over `period` bars, in percentage points.
@@ -102,6 +177,10 @@ class Snapshot:
     ret_5: float | None
     ret_20: float | None
     bars_available: int
+    # Confirmed structure, nearest-first. Targets are measured against these
+    # rather than against arithmetic multiples of the stop — see levels.py.
+    resistance: list[float] = field(default_factory=list)
+    support: list[float] = field(default_factory=list)
 
 
 def build_snapshot(df: pd.DataFrame, symbol: str) -> Snapshot:
@@ -151,6 +230,8 @@ def build_snapshot(df: pd.DataFrame, symbol: str) -> Snapshot:
         ret_5=_pct_change(close, 5),
         ret_20=_pct_change(close, 20),
         bars_available=len(df),
+        resistance=resistance_above(df, last_close, last_atr),
+        support=support_below(df, last_close, last_atr),
     )
 
 

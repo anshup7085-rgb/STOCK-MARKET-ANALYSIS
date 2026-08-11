@@ -9,6 +9,14 @@ RISK_POLICY.md drives all of it:
 
 Stops are ATR-based rather than round numbers, so the invalidation distance
 scales with the instrument's own volatility instead of an arbitrary percentage.
+
+Targets are measured to confirmed structure — the swing highs a rally would
+actually have to trade through — and NOT to arithmetic multiples of the stop.
+The distinction matters more than it looks. When targets are defined as k x risk,
+reward/risk comes back as exactly k for every instrument on every day: true by
+construction, and therefore worth nothing as a ranking signal. Measuring reward
+to the chart instead lets a name with a ceiling overhead score differently from
+one with clear air above it, which is the entire point of the comparison.
 """
 
 from __future__ import annotations
@@ -35,7 +43,38 @@ class TradeLevels:
     reward_risk: float
     atr: float
     structural_stop_used: bool
+    target_basis: str            # "structure" | "r-multiple"
     notes: list[str]
+
+
+def _targets(
+    px: float, risk: float, ladder: list[float], th: Thresholds, sign: int
+) -> tuple[float, float, float, str]:
+    """
+    Place T1/T2/stretch on the next three structural levels in the trade's
+    direction, falling back to R-multiples only where the chart offers nothing.
+
+    `sign` is +1 for a long (levels above) and -1 for a short (levels below);
+    `ladder` arrives ordered nearest-first in either case.
+
+    Falling back is not a failure — a stock at an all-time high genuinely has no
+    overhead structure to measure against. It is recorded as the basis so the
+    reader knows which kind of number they are looking at.
+    """
+    if not ladder:
+        return (
+            px + sign * th.target1_r * risk,
+            px + sign * th.target2_r * risk,
+            px + sign * th.stretch_r * risk,
+            "r-multiple",
+        )
+
+    t1 = ladder[0]
+    # Beyond the levels the chart supplies, step on by 1.5R rather than
+    # inventing structure that isn't there.
+    t2 = ladder[1] if len(ladder) > 1 else t1 + sign * th.target1_r * risk
+    stretch = ladder[2] if len(ladder) > 2 else t2 + sign * th.target1_r * risk
+    return t1, t2, stretch, "structure"
 
 
 def build_levels(s: Snapshot, th: Thresholds, direction: str = "long") -> TradeLevels | None:
@@ -69,9 +108,8 @@ def build_levels(s: Snapshot, th: Thresholds, direction: str = "long") -> TradeL
         risk = px - stop
         if risk <= 0:
             return None
-        t1 = px + th.target1_r * risk
-        t2 = px + th.target2_r * risk
-        stretch = px + th.stretch_r * risk
+        ladder = [r for r in s.resistance if r >= px + 0.25 * atr_val]
+        t1, t2, stretch, basis = _targets(px, risk, ladder, th, +1)
     else:
         atr_stop = px + th.stop_atr_multiple * atr_val
         structural = s.high_20
@@ -89,9 +127,37 @@ def build_levels(s: Snapshot, th: Thresholds, direction: str = "long") -> TradeL
         risk = stop - px
         if risk <= 0:
             return None
-        t1 = px - th.target1_r * risk
-        t2 = px - th.target2_r * risk
-        stretch = px - th.stretch_r * risk
+        ladder = [r for r in s.support if r <= px - 0.25 * atr_val]
+        t1, t2, stretch, basis = _targets(px, risk, ladder, th, -1)
+
+    # The number that used to be a constant. Reward is now whatever the chart
+    # actually offers between here and T2, expressed in units of risk.
+    reward_risk = abs(t2 - px) / risk
+
+    if basis == "structure":
+        n_struct = min(len(ladder), 3)
+        which = ["T1", "T2", "stretch"][:n_struct]
+        extended = ["T1", "T2", "stretch"][n_struct:]
+        msg = f"{', '.join(which)} on confirmed swing structure"
+        if extended:
+            msg += f"; {', '.join(extended)} extended by 1.5R (chart offers nothing further)"
+        notes.append(f"{msg} — T2 sits {abs(t2 - px) / atr_val:.1f} ATR away")
+        if abs(t1 - px) < 0.5 * risk:
+            notes.append(
+                f"first resistance sits only {abs(t1 - px) / risk:.2f}R overhead — "
+                "the move has to clear it before the trade pays"
+            )
+    else:
+        notes.append(
+            "no confirmed structure in the trade's direction — targets fall back to "
+            "R-multiples, so this R:R is assumed rather than measured"
+        )
+
+    if abs(t2 - px) / atr_val > 6:
+        notes.append(
+            f"T2 is {abs(t2 - px) / atr_val:.1f} ATRs away — a stretch for a "
+            "few-days-to-weeks horizon; consider it a trail target, not a plan"
+        )
 
     if s.atr_pct is not None and s.atr_pct > 5:
         notes.append(
@@ -111,9 +177,10 @@ def build_levels(s: Snapshot, th: Thresholds, direction: str = "long") -> TradeL
         target2=round(t2, 2),
         stretch=round(stretch, 2),
         risk_per_share=round(risk, 2),
-        reward_risk=round(th.target2_r, 2),
+        reward_risk=round(reward_risk, 2),
         atr=round(atr_val, 2),
         structural_stop_used=use_structural,
+        target_basis=basis,
         notes=notes,
     )
 

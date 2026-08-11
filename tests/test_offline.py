@@ -11,10 +11,11 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from market.backtest import _spearman, run_backtest, simulate
 from market.config import Thresholds
-from market.indicators import atr, build_snapshot, ema, rsi
+from market.indicators import atr, build_snapshot, ema, pivot_highs, rsi
 from market.levels import build_levels, size_position
-from market.score import build_score
+from market.score import build_score, regime_adjustment
 from market.universe import classify_regime, liquidity_check
 
 TH = Thresholds()
@@ -88,11 +89,21 @@ def test_short_levels_ordered():
     assert lv.stop > lv.reference_price > lv.target1 > lv.target2 > lv.stretch
 
 
-def test_r_multiple_math():
+def test_r_multiple_fallback_when_chart_offers_nothing():
+    """
+    A name at an all-time high has no overhead structure to measure against, so
+    targets fall back to R-multiples and T2 lands at exactly target2_r.
+
+    This replaces an earlier test that asserted T2 was ALWAYS 3.0R. That
+    assertion held only because targets were defined as multiples of the stop —
+    it was the bug, written down as a guarantee.
+    """
     snap = build_snapshot(synth(), "TEST")
+    snap.resistance = []
     lv = build_levels(snap, TH, "long")
+    assert lv.target_basis == "r-multiple"
     implied = (lv.target2 - lv.reference_price) / lv.risk_per_share
-    assert abs(implied - TH.target2_r) < 0.02, f"T2 is not {TH.target2_r}R: {implied}"
+    assert abs(implied - TH.target2_r) < 0.02, f"fallback T2 is not {TH.target2_r}R: {implied}"
 
 
 def test_sizing_without_equity_gives_formula_not_number():
@@ -169,6 +180,115 @@ def test_regime_classifier_directions():
 
 def test_regime_unknown_on_short_history():
     assert classify_regime(synth(n=20)).regime == "unknown"
+
+
+# -- structure detection ---------------------------------------------------
+
+def test_pivots_are_confirmed_not_predicted():
+    """
+    Pivots from a truncated series must be a PREFIX of pivots from the full
+    series. If truncation ever changes an earlier pivot, the detector is reading
+    bars that had not printed yet.
+    """
+    df = synth(n=300)
+    full = pivot_highs(df, 3, 3)
+    part = pivot_highs(df.iloc[:250], 3, 3)
+    assert part == full[: len(part)], "pivot detection leaks future bars"
+
+
+def test_pivots_lag_the_last_bar():
+    """The final `right` bars cannot have produced a confirmed pivot yet."""
+    df = synth(n=120)
+    highs = df["high"].to_numpy()
+    piv = set(pivot_highs(df, 3, 3))
+    assert not (piv & set(highs[-3:])), "a pivot was confirmed before its window closed"
+
+
+def test_targets_vary_with_structure():
+    """
+    The bug this project shipped with: R:R identical for every name because
+    targets were multiples of the stop. Different charts must now give different
+    ratios.
+    """
+    ratios = {
+        build_levels(build_snapshot(synth(seed=s, drift=d), f"S{s}"), TH, "long").reward_risk
+        for s, d in [(1, 0.001), (2, -0.001), (3, 0.004), (4, 0.0), (5, 0.002)]
+    }
+    assert len(ratios) > 1, f"reward:risk is still constant across charts: {ratios}"
+
+
+def test_reward_risk_is_consistent_with_levels():
+    """The reported ratio must equal the levels it was derived from."""
+    snap = build_snapshot(synth(), "TEST")
+    lv = build_levels(snap, TH, "long")
+    implied = (lv.target2 - lv.reference_price) / lv.risk_per_share
+    assert abs(implied - lv.reward_risk) < 0.02, "R:R disagrees with its own targets"
+    assert lv.target_basis in ("structure", "r-multiple")
+
+
+# -- regime is a scan-level deduction, not a ranking component -------------
+
+def test_regime_does_not_rank_but_does_deduct():
+    snap = build_snapshot(synth(drift=0.003, seed=11), "TEST")
+    lv = build_levels(snap, TH, "long")
+    up = build_score(snap, regime="uptrend", reward_risk=lv.reward_risk)
+    down = build_score(snap, regime="downtrend", reward_risk=lv.reward_risk)
+
+    assert "market regime" not in [c.name for c in up.components], (
+        "regime is back in the per-name components, where it cannot rank"
+    )
+    assert up.coverage == down.coverage, "regime must not move coverage"
+    assert down.raw < up.raw, "a long in a downtrend must score lower"
+
+
+def test_regime_adjustment_mirrors_for_shorts():
+    long_pen, _ = regime_adjustment("downtrend", "long")
+    short_pen, _ = regime_adjustment("downtrend", "short")
+    assert long_pen > short_pen, "a downtrend should hurt longs, not shorts"
+
+
+# -- backtest harness ------------------------------------------------------
+
+def test_simulate_takes_the_stop_when_a_bar_spans_both():
+    """Ambiguous bars must resolve against the trade, never in its favour."""
+    df = pd.DataFrame(
+        {"open": [100, 100], "high": [100, 120], "low": [100, 80],
+         "close": [100, 110], "volume": [1, 1]},
+        index=pd.bdate_range(end=pd.Timestamp("2026-08-10"), periods=2),
+    )
+    outcome, r, _ = simulate(df, 0, entry=100, stop=90, target=110,
+                             horizon=1, direction="long")
+    assert outcome == "stop" and r == -1.0
+
+
+def test_simulate_gap_fills_worse_than_the_stop():
+    """RISK_POLICY.md: a stop is a trigger, not a guaranteed price."""
+    df = pd.DataFrame(
+        {"open": [100, 80], "high": [100, 85], "low": [100, 78],
+         "close": [100, 82], "volume": [1, 1]},
+        index=pd.bdate_range(end=pd.Timestamp("2026-08-10"), periods=2),
+    )
+    outcome, r, _ = simulate(df, 0, entry=100, stop=90, target=130,
+                             horizon=1, direction="long")
+    assert outcome == "stop" and r < -1.0, f"gap should exceed 1R loss, got {r}"
+
+
+def test_backtest_runs_and_stays_causal():
+    # Prices high enough to clear the Rs25cr turnover floor — the default synth
+    # is deliberately thin and the liquidity gate rejects it, as it should.
+    bars = {
+        f"S{i}": synth(n=320, seed=i, start=1500.0, volume=2_000_000)
+        for i in range(4)
+    }
+    res = run_backtest(bars, TH, horizon=20, step=10, warmup=200)
+    assert res.n > 0, "harness produced no trades"
+    assert all(-8 < t.r_multiple < 20 for t in res.trades), "implausible R multiple"
+    assert all(t.outcome in ("target", "stop", "timeout") for t in res.trades)
+
+
+def test_spearman_detects_direction():
+    assert _spearman([1, 2, 3, 4, 5], [1, 2, 3, 4, 5]) > 0.99
+    assert _spearman([1, 2, 3, 4, 5], [5, 4, 3, 2, 1]) < -0.99
 
 
 if __name__ == "__main__":

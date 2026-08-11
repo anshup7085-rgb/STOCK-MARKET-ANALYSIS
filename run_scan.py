@@ -172,7 +172,9 @@ def main() -> int:
         )
 
         cat = catalysts.get(sym, {})
-        rr = th.target2_r if levels else None
+        # Measured from the chart, not read from config. Passing th.target2_r
+        # here was the bug that made this component constant for every name.
+        rr = levels.reward_risk if levels else None
 
         score = build_score(
             snap,

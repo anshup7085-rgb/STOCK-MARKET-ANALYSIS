@@ -47,6 +47,8 @@ class Score:
     components: list[Component] = field(default_factory=list)
     penalty: float = 0.0
     penalty_reasons: list[str] = field(default_factory=list)
+    regime_penalty: float = 0.0
+    regime_reason: str = ""
 
     @property
     def available(self) -> list[Component]:
@@ -71,7 +73,7 @@ class Score:
         if denom == 0:
             return 0.0
         base = sum(c.points for c in self.available) / denom * 100
-        return max(0.0, base - self.penalty)
+        return max(0.0, base - self.penalty - self.regime_penalty)
 
     @property
     def confidence(self) -> str:
@@ -94,6 +96,9 @@ class Score:
                 lines.append(f"  {c.name}: UNAVAILABLE — {c.reasoning}")
         for r in self.penalty_reasons:
             lines.append(f"  PENALTY: {r}")
+        if self.regime_reason:
+            tag = "REGIME" if self.regime_penalty else "regime"
+            lines.append(f"  {tag}: {self.regime_reason}")
         return "\n".join(lines)
 
 
@@ -101,21 +106,40 @@ class Score:
 # Components
 # --------------------------------------------------------------------------
 
-def score_regime(regime: Regime, direction: str = "long") -> Component:
-    """Market regime, 10 pts. A long in a downtrend is swimming upstream."""
+def regime_adjustment(regime: Regime, direction: str = "long") -> tuple[float, str]:
+    """
+    Regime as a scan-level deduction, NOT a per-name component.
+
+    It used to be one of the seven scored components, worth 10 points. That was
+    a category error: the regime is a property of the market, so it returns the
+    same number for every candidate in a run — measured spread across a 46-name
+    scan was exactly 0.0. Ten points that cannot separate one name from another
+    are ten points of noise in a ranking.
+
+    Its real job is different. 'A long in a downtrend is swimming upstream' is a
+    statement about whether to trade AT ALL, not about which name to prefer. So
+    it now deducts from every candidate equally: the ranking is untouched, the
+    absolute scores fall, and in a hostile tape the whole shortlist can drop
+    below the floor and correctly produce NO TRADE.
+    """
     table = {
-        "uptrend": 10.0,
-        "transitioning": 6.0,
+        "uptrend": 0.0,
+        "transitioning": 4.0,
         "range": 5.0,
-        "volatile": 3.0,
-        "downtrend": 1.0,
+        "volatile": 7.0,
+        "downtrend": 10.0,
     }
     if regime == "unknown":
-        return Component("market regime", 0, 10, False, "regime not classified")
-    pts = table.get(regime, 5.0)
+        return 0.0, (
+            "regime not classified — no adjustment applied, but an unknown tape is "
+            "itself a reason to size down"
+        )
+    pen = table.get(regime, 5.0)
     if direction == "short":
-        pts = 11.0 - pts  # mirror it
-    return Component("market regime", pts, 10, True, f"{regime} ({direction})")
+        pen = 10.0 - pen  # a downtrend helps a short as much as it hurts a long
+    if pen == 0.0:
+        return 0.0, f"{regime} ({direction}) — trading with the tape, no deduction"
+    return pen, f"{regime} ({direction}) — {pen:.0f} pt deduction, applied to every candidate"
 
 
 def score_trend(s: Snapshot) -> Component:
@@ -343,7 +367,6 @@ def build_score(
 ) -> Score:
     sc = Score(symbol=s.symbol)
     sc.components = [
-        score_regime(regime, direction),
         score_trend(s),
         score_momentum(s, rel_strength),
         score_liquidity(s, min_turnover_cr),
@@ -354,4 +377,5 @@ def build_score(
     sc.penalty, sc.penalty_reasons = compute_penalty(
         s, staleness_days, max_staleness, event_risk, event_note
     )
+    sc.regime_penalty, sc.regime_reason = regime_adjustment(regime, direction)
     return sc

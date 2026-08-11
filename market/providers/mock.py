@@ -8,6 +8,7 @@ every downstream report will carry that flag, which is the point.
 
 from __future__ import annotations
 
+import zlib
 from datetime import datetime
 
 import numpy as np
@@ -23,7 +24,11 @@ class MockProvider(DataProvider):
     supports_options = False
 
     def get_bars(self, symbol: str, timeframe: str = "1d", lookback: int = 250) -> Bars:
-        seed = abs(hash(symbol)) % (2**31)
+        # crc32, not hash(): Python randomises string hashing per process, so
+        # hash() gave this provider different synthetic prices on every run. A
+        # wiring check you cannot repeat is not much of a check, and it makes
+        # any before/after comparison on mock data meaningless.
+        seed = zlib.crc32(symbol.encode()) % (2**31)
         rng = np.random.default_rng(seed)
         n = min(lookback, 300)
 
