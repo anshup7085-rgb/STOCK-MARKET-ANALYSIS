@@ -30,8 +30,13 @@ def get_provider(name: str | None = None) -> DataProvider:
 
         return KiteProvider()
 
+    if choice in ("groww",):
+        from market.providers.groww import GrowwProvider
+
+        return GrowwProvider()
+
     raise DataUnavailable(
-        f"Unknown provider '{choice}'. Supported: yfinance, kite, mock"
+        f"Unknown provider '{choice}'. Supported: yfinance, groww, kite, mock"
     )
 
 

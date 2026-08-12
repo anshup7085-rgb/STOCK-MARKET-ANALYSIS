@@ -372,6 +372,74 @@ def test_short_economics_do_not_silently_invert():
     assert e.net_loss_at_stop < 0
 
 
+# -- Groww provider (offline parts only) -----------------------------------
+
+def test_groww_normalises_list_and_dict_candles():
+    """Both documented row shapes must land on the same frame."""
+    from market.providers.groww import GrowwProvider
+    ts = [1754870400, 1754956800]
+    as_list = {"candles": [[ts[0], 10, 12, 9, 11, 500], [ts[1], 11, 13, 10, 12, 600]]}
+    as_dict = {"candles": [
+        {"timestamp": ts[0], "open": 10, "high": 12, "low": 9, "close": 11, "volume": 500},
+        {"timestamp": ts[1], "open": 11, "high": 13, "low": 10, "close": 12, "volume": 600},
+    ]}
+    a = GrowwProvider._to_frame(as_list, "TEST")
+    b = GrowwProvider._to_frame(as_dict, "TEST")
+    assert list(a.columns) == ["open", "high", "low", "close", "volume"]
+    assert a.equals(b), "list and dict candle shapes disagree"
+    assert a.index.is_monotonic_increasing
+
+
+def test_groww_detects_millisecond_timestamps():
+    from market.providers.groww import GrowwProvider
+    secs = GrowwProvider._to_frame({"candles": [[1754870400, 1, 2, 0.5, 1.5, 10]]}, "T")
+    mills = GrowwProvider._to_frame({"candles": [[1754870400000, 1, 2, 0.5, 1.5, 10]]}, "T")
+    assert secs.index[0] == mills.index[0], "epoch unit misdetected"
+
+
+def test_groww_refuses_unrecognised_payload_instead_of_guessing():
+    from market.providers.groww import GrowwProvider
+    from market.providers.base import DataUnavailable
+    for bad in ({"unexpected": [1, 2, 3]}, {"candles": []}):
+        try:
+            GrowwProvider._to_frame(bad, "TEST")
+            raise AssertionError(f"should have refused: {bad}")
+        except DataUnavailable:
+            pass
+
+
+def test_groww_provider_is_registered():
+    from market.providers import get_provider
+    from market.providers.base import DataUnavailable
+    try:
+        get_provider("groww")
+    except DataUnavailable as exc:
+        # Reaching the credential check proves the name resolves.
+        assert "GROWW_ACCESS_TOKEN" in str(exc), str(exc)
+    except ImportError:
+        pass
+
+
+def test_groww_rejects_a_stored_totp_seed():
+    """Storing a TOTP seed defeats 2FA. The provider must refuse to start."""
+    import os
+    from market.providers.base import DataUnavailable
+    from market.providers.groww import GrowwProvider
+    old_t, old_s = os.environ.get("GROWW_ACCESS_TOKEN"), os.environ.get("GROWW_TOTP_SECRET")
+    os.environ["GROWW_ACCESS_TOKEN"] = "dummy"
+    os.environ["GROWW_TOTP_SECRET"] = "dummy"
+    try:
+        GrowwProvider()
+        raise AssertionError("provider accepted a stored TOTP seed")
+    except DataUnavailable as exc:
+        assert "TOTP" in str(exc)
+    finally:
+        for k, v in (("GROWW_ACCESS_TOKEN", old_t), ("GROWW_TOTP_SECRET", old_s)):
+            os.environ.pop(k, None)
+            if v is not None:
+                os.environ[k] = v
+
+
 if __name__ == "__main__":
     import sys
     import traceback

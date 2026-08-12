@@ -36,6 +36,46 @@ FII/DII flows, delivery volumes, or corporate-action-adjusted series. Yahoo's
 NSE data also carries occasional bad ticks — the liquidity and staleness gates
 catch the worst, not all.
 
+## 3b. Groww — intraday candles and an option chain
+
+`MARKET_PROVIDER=groww`. Requires a Groww trading-API subscription; check current
+pricing and entitlements on Groww's own developer console rather than taking my
+word for it.
+
+```bash
+pip install growwapi
+export GROWW_ACCESS_TOKEN=...        # you mint this yourself, see below
+python run_scan.py --provider groww --symbols RELIANCE TCS HAL
+```
+
+**Minting the token — do this yourself, not from this project.**
+
+The SDK offers `GrowwAPI.get_access_token(api_key, totp=...)`, which will mint a
+token from your API key plus a TOTP code. Run it in your own shell:
+
+```python
+# token.py — yours, not this repo's. Never commit it.
+from growwapi import GrowwAPI
+print(GrowwAPI.get_access_token(api_key="your_api_key", totp="123456"))
+```
+
+Then export the result. **`market/providers/groww.py` will refuse to start if it
+finds `GROWW_TOTP_SECRET` in the environment** — storing a TOTP seed so a script
+can generate codes on demand defeats the second factor entirely. Type the code.
+
+**What this provider will and will not do:**
+
+- Reads candles, instruments, expiries and option chains. That is all.
+- `place_order`, `modify_order`, `cancel_order` and the smart-order methods are
+  explicitly blocked — the wrapper raises if anything reaches for them.
+- Your API secret and TOTP seed never enter this project.
+
+**Response-shape caveat.** Groww documents a "V2" candle format but not its exact
+keys. `_to_frame` accepts the common shapes and **raises rather than guesses** if
+it recognises none. If it raises on your account, print the raw payload and widen
+`_CANDLE_KEYS` — do not paper over it, because a mis-parsed bar is a fabricated
+price.
+
 ## 4. Kite Connect — when you want real OI
 
 Zerodha's API is a paid monthly subscription, and historical data is billed

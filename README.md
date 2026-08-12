@@ -49,7 +49,7 @@ market/levels.py         ATR stops, structure-based targets, position sizing
 market/score.py          transparent 0-85 model with per-component reasoning
 market/backtest.py       path simulation, score-band stats, rank correlation
 market/universe.py       candidate list, liquidity gate, regime classifier
-market/providers/        yfinance (free, EOD) | kite (paid, intraday + OI) | mock
+market/providers/        yfinance (free, EOD) | groww | kite (intraday + OI) | mock
 reports/                 rendered session reports
 ```
 

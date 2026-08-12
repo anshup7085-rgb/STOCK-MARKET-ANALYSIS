@@ -5,6 +5,10 @@ numpy>=1.24
 # Free data provider (EOD NSE via .NS tickers). Start here.
 yfinance>=0.2.40
 
+# Optional: Groww trading API — intraday candles + option chain.
+# Requires a Groww API subscription. See SETUP.md 3b for the token flow.
+# growwapi>=1.5.0
+
 # Optional: Zerodha Kite Connect — intraday bars + real option chain.
 # Paid subscription. Uncomment after you have an app on the Kite developer console.
 # kiteconnect>=4.2.0
