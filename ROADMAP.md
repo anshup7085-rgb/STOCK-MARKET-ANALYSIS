@@ -12,10 +12,13 @@ evidence is required before it touches money.
 | Backtest harness | Built — 752-trade control on random walks returns Spearman +0.021, correctly finding nothing |
 | Honest failure | Verified — dead feed gives regime unknown, zero candidates, NO TRADE |
 | Market data | **Blocked** — 403 at the egress gateway for every financial host |
-| Does the score predict? | **Unknown** — the harness is ready; the answer may be no |
+| Does the score predict? | **Unknown** — the harness is ready and now reports R net of costs; the answer may be no |
 | Sector / breadth | Not built |
-| Tradability gates | Not built |
-| Execution | Absent by design — read-only |
+| Tradability gates | Partial — corporate-action detection and a restricted list built; holiday calendar built but **empty** until filled from the NSE circular; F&O ban is not a cash-segment restriction |
+| Portfolio correlation | Built — pre-trade, in the risk engine |
+| Execution | Built in `trading/` — paper by default; live gated on this ladder (see `TRADING.md`) |
+| Paper-trading loop | Built — real-time, hash-chained journal; Gate 2 reads it |
+| Gates as code | Built — `python run_trader.py gates` |
 
 ## The promotion ladder
 
@@ -51,6 +54,11 @@ RESEARCH ──gate 1──▶ PAPER ──gate 2──▶ SMALL LIVE ──gate
 - Maximum drawdown inside the plan
 - Correlation checks clean: no month where the book was effectively one bet
 
+These gates are encoded in `trading/gates.py` and the live path reads them:
+autonomous execution requires Gates 1 and 2; per-order-confirmed live trading
+without them needs an explicit, journaled override. The live risk cap of 0.25%
+per trade is Gate 3's "small live" stage, applied in code.
+
 These thresholds are set **now**, before results exist. That is the only moment
 they can be set honestly; after the first encouraging backtest every one of them
 becomes negotiable.
@@ -69,10 +77,11 @@ becomes negotiable.
 - Universe from 47 names to the full F&O list
 
 **Later (months)**
-- Paper-trading loop with real-time logging and no retrospective edits
+- ~~Paper-trading loop with real-time logging and no retrospective edits~~ — built
 - Position management: trailing stops, partial exits at T1
 - Regime-adaptive weights — only if the backtest justifies them
-- Broker authorisation model, per-order confirmation, complete decision log
+- ~~Broker authorisation model, per-order confirmation, complete decision log~~ — built
+- Notifications on cycle alerts (exit code 3 is the hook)
 
 Ordering note: widening the universe is deliberately late. Widening a scanner
 whose ranking is unvalidated just produces more confidently-ranked noise.

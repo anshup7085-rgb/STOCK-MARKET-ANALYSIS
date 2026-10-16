@@ -8,5 +8,8 @@ venv/
 *.json
 !catalysts.example.json
 !package.json
+!data/nse_holidays.json
 scans/
+# trading books, journals, kill switches and policies: account data, never committed
+state/
 .DS_Store

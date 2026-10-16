@@ -12,6 +12,7 @@ initiates a login and it never places an order — it is read-only by design.
 
 from __future__ import annotations
 
+import time
 from datetime import datetime, timedelta
 
 import pandas as pd
@@ -32,6 +33,11 @@ class KiteProvider(DataProvider):
 
     _TF = {"1d": "day", "1h": "60minute", "15m": "15minute", "5m": "5minute"}
 
+    # Kite rate-limits historical-data requests per second (3/s when this was
+    # written — check the current API docs). A full-universe scan makes ~48 of
+    # them back to back, so they are spaced rather than allowed to bounce.
+    _HIST_GAP_S = 0.35
+
     def __init__(self) -> None:
         if not settings.kite_api_key or not settings.kite_access_token:
             raise DataUnavailable(
@@ -46,6 +52,7 @@ class KiteProvider(DataProvider):
         self._kite = KiteConnect(api_key=settings.kite_api_key)
         self._kite.set_access_token(settings.kite_access_token)
         self._instruments: pd.DataFrame | None = None
+        self._last_hist = 0.0
 
     # -- instrument lookup -------------------------------------------------
 
@@ -76,6 +83,10 @@ class KiteProvider(DataProvider):
         to_dt = datetime.now(IST)
         from_dt = to_dt - timedelta(days=span)
 
+        wait = self._last_hist + self._HIST_GAP_S - time.monotonic()
+        if wait > 0:
+            time.sleep(wait)
+        self._last_hist = time.monotonic()
         try:
             candles = self._kite.historical_data(token, from_dt, to_dt, interval)
         except Exception as exc:

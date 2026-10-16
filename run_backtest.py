@@ -98,6 +98,7 @@ def main() -> int:
             "direction": res.direction,
             "n_trades": res.n,
             "expectancy_r": res.expectancy_r,
+            "expectancy_net_r": res.expectancy_net_r,
             "spearman": res.spearman,
             "bands": [asdict(b) for b in res.bands],
             "notes": res.notes,

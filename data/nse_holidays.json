@@ -1,0 +1,6 @@
+{
+  "_comment": "NSE equity-segment trading holidays. Ships EMPTY on purpose: a guessed holiday list is fabricated data. Copy the dates from the exchange's own circular ('Trading holidays for the calendar year', nseindia.com -> Circulars), name it in 'source', and set 'verified_on'. Weekend dates need not be listed.",
+  "source": null,
+  "verified_on": null,
+  "holidays": {}
+}

@@ -91,10 +91,33 @@ how you source it.
 
 ### Execution
 
-This project is **read-only by design**. No module places, modifies or cancels an
-order, and none should be added without the confirmation and logging controls in
-`PROMPT.md`. If asked to trade, explain what the broker authorisation model
-would require first.
+`market/` is **read-only by design** and stays that way. Orders exist in one
+place only: `trading/`, behind the controls `PROMPT.md` requires — risk engine,
+per-order confirmation, kill switch, hash-chained journal — and the ROADMAP
+evidence gates. `TRADING.md` is the runbook.
+
+```bash
+python run_trader.py cycle --mode paper        # paper: simulated fills, safe to run
+python run_trader.py replay --equity 500000    # the whole system through history
+python run_trader.py status --mode paper       # book, open risk, journal integrity
+python run_trader.py gates --backtest F        # ROADMAP Gates 1-3 from evidence
+```
+
+Rules for an agent working in this repo:
+
+- **Paper and replay are yours to run. Live is not.** Never run a `--mode live`
+  command, never set `LIVE_TRADING_ACK`, and never write
+  `state/live/execution_policy.json`. Live execution is run by the account
+  holder, in their own shell, confirming each order themselves.
+- **Never weaken a control to make a trade happen.** Loosening a risk limit,
+  a floor or a gate threshold needs the user's explicit instruction and a
+  journaled reason — not a convenient backtest.
+- **Never edit a journal or a book.** `state/` is evidence. A fix to the system
+  goes in code; the record of what it did stays as it was.
+- **Never handle 2FA material.** No TOTP seeds, passwords, PINs or API secrets in
+  code, env files or messages. Tokens are minted by the user by hand.
+- If asked to trade live, explain what the broker authorisation model and the
+  gates require (`python run_trader.py gates`) rather than working around them.
 
 ### Reporting
 

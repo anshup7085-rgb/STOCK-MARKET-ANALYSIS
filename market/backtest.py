@@ -21,8 +21,11 @@ Method, and the honesty constraints on each step:
     backtest flatters itself.
   - A gap through the stop fills at the open, not at the stop. RISK_POLICY.md:
     'Never assume a stop guarantees the exact exit price.'
-  - Charges, STT and slippage are still excluded. Every R below is therefore
-    optimistic by a real, unmodelled amount.
+  - Every trade carries two R figures: `r_multiple`, gross, and
+    `net_r_multiple`, after the round-trip charges in market/charges.py plus
+    assumed slippage on both legs, on a Rs1,00,000 position. ROADMAP Gate 1
+    asks for positive expectancy AFTER costs, so the net figure is the one
+    that decides it.
 
 What it deliberately does NOT do: survivorship correction (the universe is
 today's liquid names, which is a real forward-looking bias), corporate-action
@@ -37,6 +40,7 @@ from statistics import mean
 
 import pandas as pd
 
+from market.charges import SCHEDULES, round_trip_costs
 from market.config import Thresholds
 from market.indicators import build_snapshot, relative_strength
 from market.levels import build_levels
@@ -58,6 +62,7 @@ class Trade:
     outcome: str            # "target" | "stop" | "timeout"
     r_multiple: float
     bars_held: int
+    net_r_multiple: float = 0.0   # after charges and slippage
 
 
 @dataclass
@@ -69,6 +74,7 @@ class BandStats:
     median_r: float
     target_rate: float
     stop_rate: float
+    mean_net_r: float = 0.0
 
 
 @dataclass
@@ -87,6 +93,35 @@ class BacktestResult:
     @property
     def expectancy_r(self) -> float | None:
         return mean(t.r_multiple for t in self.trades) if self.trades else None
+
+    @property
+    def expectancy_net_r(self) -> float | None:
+        return mean(t.net_r_multiple for t in self.trades) if self.trades else None
+
+
+COST_NOTIONAL = 100_000.0
+
+
+def net_r(
+    entry: float, stop: float, r: float, direction: str,
+    segment: str = "delivery", slippage_pct: float = 0.05,
+) -> float:
+    """
+    Gross R minus round-trip costs expressed in R.
+
+    Costs are charged on a Rs1,00,000 position: fixed charges (DP, capped
+    brokerage) make small positions dearer in R, so a notional has to be picked,
+    and it is the same one the scanner uses when equity is unknown.
+    """
+    risk = abs(entry - stop)
+    if risk <= 0:
+        return r
+    sign = 1 if direction == "long" else -1
+    exit_px = entry + sign * r * risk
+    qty = max(1, int(COST_NOTIONAL / entry))
+    charges = round_trip_costs(entry, exit_px, qty, SCHEDULES[segment], direction).total
+    slip = qty * (entry + exit_px) * slippage_pct / 100.0
+    return r - (charges + slip) / (qty * risk)
 
 
 def simulate(
@@ -177,6 +212,7 @@ def _band(trades: list[Trade], label: str, lo: float, hi: float) -> BandStats | 
         median_r=median,
         target_rate=sum(1 for t in sel if t.outcome == "target") / len(sel) * 100,
         stop_rate=sum(1 for t in sel if t.outcome == "stop") / len(sel) * 100,
+        mean_net_r=mean(t.net_r_multiple for t in sel),
     )
 
 
@@ -189,6 +225,8 @@ def run_backtest(
     step: int = 5,
     warmup: int = 200,
     direction: str = "long",
+    segment: str = "delivery",
+    slippage_pct: float = 0.05,
 ) -> BacktestResult:
     """
     Walk every symbol forward, scoring only on history and settling on the path.
@@ -258,6 +296,10 @@ def run_backtest(
                     outcome=outcome,
                     r_multiple=round(r, 3),
                     bars_held=held,
+                    net_r_multiple=round(
+                        net_r(levels.reference_price, levels.stop, r, direction,
+                              segment, slippage_pct), 3
+                    ),
                 )
             )
 
@@ -273,7 +315,8 @@ def run_backtest(
         [t.score for t in res.trades], [t.r_multiple for t in res.trades]
     )
     res.notes.append(
-        "Charges, STT and slippage excluded — every R here is optimistic."
+        f"Gross R ignores costs. Net R deducts {segment} charges (UNVERIFIED default "
+        f"rates) and {slippage_pct}% slippage per leg on a Rs1,00,000 position."
     )
     res.notes.append(
         "Universe is today's liquid names, so results carry survivorship bias."
@@ -287,16 +330,18 @@ def format_report(res: BacktestResult) -> str:
         f"Backtest — {res.direction}, {res.horizon}-bar horizon, {res.n} trades",
         "",
         f"{'score band':>11s} {'n':>5s} {'win%':>7s} {'mean R':>8s} "
-        f"{'med R':>7s} {'target%':>8s} {'stop%':>7s}",
+        f"{'net R':>7s} {'med R':>7s} {'target%':>8s} {'stop%':>7s}",
     ]
     for b in res.bands:
         out.append(
             f"{b.label:>11s} {b.n:5d} {b.win_rate:6.1f}% {b.mean_r:8.3f} "
-            f"{b.median_r:7.3f} {b.target_rate:7.1f}% {b.stop_rate:6.1f}%"
+            f"{b.mean_net_r:7.3f} {b.median_r:7.3f} {b.target_rate:7.1f}% {b.stop_rate:6.1f}%"
         )
 
     exp = res.expectancy_r
-    out += ["", f"overall expectancy: {exp:+.3f}R per trade" if exp is not None else "no trades"]
+    out += ["", f"overall expectancy: {exp:+.3f}R per trade gross" if exp is not None else "no trades"]
+    if res.expectancy_net_r is not None:
+        out.append(f"                    {res.expectancy_net_r:+.3f}R per trade after costs")
     if res.spearman is not None:
         out.append(f"score vs outcome (Spearman): {res.spearman:+.3f}")
 
