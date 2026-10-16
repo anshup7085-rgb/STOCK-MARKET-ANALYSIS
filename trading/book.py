@@ -39,6 +39,8 @@ class Book:
     # The completed bar whose signals have already been acted on. A rerun on
     # the same bar — a crash, a second cron firing — must not trade it twice.
     last_signal_bar: str | None = None
+    # Live books are bound to the broker their order ids came from.
+    broker: str | None = None
 
     # -- identity ---------------------------------------------------------
 

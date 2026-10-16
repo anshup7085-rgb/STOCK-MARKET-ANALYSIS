@@ -12,10 +12,12 @@ trading/live.py. Read TRADING.md before using `--mode live`.
     python run_trader.py kill    --reason "..."                # no new entries, anywhere
     python run_trader.py release --reason "..."
     python run_trader.py flatten --mode paper --reason "..."
+    python run_trader.py record-exit --trade-id ID --qty N --price P --note "contract note ..."
 
     # live — see TRADING.md for the daily routine
-    python run_trader.py cycle   --mode live --provider kite [--override-gates "..."]
-    python run_trader.py watch   --mode live --provider kite
+    python run_trader.py cycle   --mode live --provider kite  --broker kite  [--override-gates "..."]
+    python run_trader.py cycle   --mode live --provider groww --broker groww [--override-gates "..."]
+    python run_trader.py watch   --mode live --provider kite  --broker kite
 
 Exit codes: 0 ok, 2 refused/fatal, 3 completed with alerts (wire this to a notifier).
 """
@@ -24,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time as _time
 from datetime import date, datetime
@@ -59,8 +62,7 @@ def _engine(cfg: TradingConfig, args) -> TradingEngine:
             autonomous=args.autonomous, override_reason=args.override_gates,
         )
         provider = get_provider(args.provider)
-        from trading.brokers.kite import KiteBroker
-        broker = KiteBroker(live_ack=True, max_orders_per_second=cfg.max_orders_per_second)
+        broker = _live_broker(cfg, args.broker)
         confirmer = auth.confirmer
     else:
         provider = get_provider(args.provider)
@@ -70,6 +72,34 @@ def _engine(cfg: TradingConfig, args) -> TradingEngine:
         cfg, provider, broker, journal, BookStore(cfg.book_path), confirmer,
         symbols=args.symbols, catalysts=load_catalysts(args.catalysts),
     )
+
+
+def _live_broker(cfg: TradingConfig, choice: str | None):
+    """
+    Build the live broker, and hold a live book to the broker its order ids
+    came from: a Kite order id means nothing to Groww, and vice versa.
+    """
+    name = (choice or os.getenv("LIVE_BROKER") or "kite").strip().lower()
+    if name not in ("kite", "groww"):
+        raise LiveRefused(f"unknown live broker '{name}' — use kite or groww")
+    store = BookStore(cfg.book_path)
+    book = store.load()
+    if book.broker and book.broker != name:
+        raise LiveRefused(
+            f"this live book trades through {book.broker}; it cannot switch to {name} "
+            "with positions and order ids from the other broker. Close it out first, "
+            "then start a new live book."
+        )
+    if name == "groww":
+        from trading.brokers.groww import GrowwBroker
+        broker = GrowwBroker(live_ack=True, max_orders_per_second=cfg.max_orders_per_second)
+    else:
+        from trading.brokers.kite import KiteBroker
+        broker = KiteBroker(live_ack=True, max_orders_per_second=cfg.max_orders_per_second)
+    if book.broker is None:
+        book.broker = name
+        store.save(book)
+    return broker
 
 
 # ---------------------------------------------------------------------------
@@ -114,7 +144,7 @@ def cmd_watch(args) -> int:
         return 2
     try:
         eng = _engine(cfg, args)
-    except (LiveRefused, BrokerError, DataUnavailable) as exc:
+    except (LiveRefused, BrokerError, DataUnavailable, FileNotFoundError) as exc:
         print(f"[refused] {exc}", file=sys.stderr)
         return 2
     alerts = False
@@ -212,6 +242,21 @@ def cmd_release(args) -> int:
     return 0
 
 
+def cmd_record_exit(args) -> int:
+    """Book a fill the system could not read from the broker. Sends nothing."""
+    cfg = _cfg(args.mode)
+    try:
+        eng = TradingEngine(cfg, None, None, Journal(cfg.journal_path, cfg.mode),
+                            BookStore(cfg.book_path), SimulatedConfirmer())
+        rep = eng.record_manual_exit(args.trade_id, args.qty, args.price, args.reason,
+                                     args.note, at=args.date)
+    except (ValueError, FileNotFoundError) as exc:
+        print(f"[refused] {exc}", file=sys.stderr)
+        return 2
+    print(rep.text())
+    return 0
+
+
 def cmd_flatten(args) -> int:
     cfg = _cfg(args.mode)
     if cfg.is_live:
@@ -221,7 +266,7 @@ def cmd_flatten(args) -> int:
             return 2
     try:
         eng = _engine(cfg, args)
-    except (LiveRefused, BrokerError, DataUnavailable) as exc:
+    except (LiveRefused, BrokerError, DataUnavailable, FileNotFoundError) as exc:
         print(f"[refused] {exc}", file=sys.stderr)
         return 2
     rep = eng.flatten(args.reason)
@@ -286,6 +331,8 @@ def main() -> int:
                        help="live, per-order confirmed only: trade despite failed gates; reason is journaled")
         p.add_argument("--autonomous", action="store_true",
                        help="live without per-order confirmation; needs gates + a signed policy")
+        p.add_argument("--broker", default=None, choices=("kite", "groww"),
+                       help="live broker (default: LIVE_BROKER env, else kite)")
 
     p = sub.add_parser("init")
     p.add_argument("--mode", default="paper", choices=("paper", "live"))
@@ -306,6 +353,16 @@ def main() -> int:
     common(p)
     p.add_argument("--reason", required=True)
     p.set_defaults(fn=cmd_flatten)
+
+    p = sub.add_parser("record-exit", help="book a fill the broker could not report (sends nothing)")
+    p.add_argument("--mode", default="live", choices=("paper", "live"))
+    p.add_argument("--trade-id", required=True)
+    p.add_argument("--qty", type=int, required=True)
+    p.add_argument("--price", type=float, required=True)
+    p.add_argument("--reason", default="manual", choices=("stop", "target", "time", "emergency", "manual"))
+    p.add_argument("--note", required=True, help="where the fill came from, e.g. contract note number")
+    p.add_argument("--date", default=None, help="YYYY-MM-DD of the fill (default today)")
+    p.set_defaults(fn=cmd_record_exit)
 
     for name, fn in (("status", cmd_status), ("verify", cmd_verify)):
         p = sub.add_parser(name)

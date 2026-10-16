@@ -71,7 +71,7 @@ market/providers/        yfinance (free, EOD) | groww | kite (intraday + OI) | m
 trading/engine.py        the daily cycle: scan, reconcile, breakers, entries, journal
 trading/risk.py          pre-trade risk engine, circuit breakers, kill switch
 trading/strategy.py      scan candidates into sized intents (sized on net loss)
-trading/brokers/         paper (simulated fills) | kite (live: LIMIT + GTT OCO)
+trading/brokers/         paper (simulated fills) | kite (live: LIMIT + GTT OCO) | groww (live: LIMIT + paired GTTs)
 trading/journal.py       hash-chained, append-only audit log
 trading/gates.py         ROADMAP Gates 1-3 evaluated from recorded evidence
 trading/live.py          the live opt-in: ack phrase, gates, confirmation, policy

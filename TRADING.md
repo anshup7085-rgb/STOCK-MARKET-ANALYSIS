@@ -117,15 +117,26 @@ this whole system have done?". Each run gets its own directory under
 ```bash
 export LIVE_TRADING_ACK="I accept that this places real orders with real money"
 python run_trader.py init  --mode live --equity 200000     # capital the system may use
-python run_trader.py cycle --mode live --provider kite --backtest scans/backtest.json
-python run_trader.py watch --mode live --provider kite     # during the session
+
+# Zerodha
+python run_trader.py cycle --mode live --broker kite  --provider kite  --backtest scans/backtest.json
+python run_trader.py watch --mode live --broker kite  --provider kite      # during the session
+
+# or Groww
+python run_trader.py cycle --mode live --broker groww --provider groww --backtest scans/backtest.json
+python run_trader.py watch --mode live --broker groww --provider groww
 ```
+
+`--broker` defaults to `LIVE_BROKER`, else `kite`. A live book is bound to the
+broker of its first live cycle — order ids from one broker mean nothing to the
+other — so switching brokers means closing out and starting a new live book.
 
 The live path refuses unless all of the following hold:
 
 1. `LIVE_TRADING_ACK` is set to exactly the phrase above.
-2. `KITE_API_KEY` and a `KITE_ACCESS_TOKEN` minted by hand today are present, and
-   **no** TOTP seed, password or PIN is in the environment.
+2. Broker credentials minted by hand today are present — `KITE_API_KEY` +
+   `KITE_ACCESS_TOKEN`, or `GROWW_ACCESS_TOKEN` — and **no** TOTP seed, password or
+   PIN is in the environment.
 3. ROADMAP **Gates 1 and 2 pass** (`python run_trader.py gates`). If they do not, you
    may still trade **with per-order confirmation** by passing
    `--override-gates "<your reason>"`; the reason is journaled before anything
@@ -133,8 +144,8 @@ The live path refuses unless all of the following hold:
 4. Each order is confirmed at the terminal by typing it back (`BUY 12 TCS`). With
    no terminal attached — e.g. from cron — nothing is sent.
 
-**What a confirmation covers.** The whole plan on the ticket: the entry, the GTT
-stop/target placed once it fills, and the time or emergency exit the plan
+**What a confirmation covers.** The whole plan on the ticket: the entry, the
+stop/target protection placed once it fills, and the time or emergency exit the plan
 already names. Those follow-on orders only ever reduce or close the confirmed
 position, like a bracket order. Anything off the ticket (`flatten`) needs its
 own confirmation.
@@ -166,8 +177,33 @@ before you pay or trade — these rules changed in 2025–26 and may change agai
 | A daily manual login | Access tokens expire each morning; SEBI's framework expects a human 2FA login each trading day | `python tools/kite_session.py` — you log in on Zerodha's page; it prints the export line. It never stores your secret or a TOTP seed. |
 | Algo ID, if required | The exchange framework tags algo orders | Ask Zerodha whether a self-built strategy at this order rate needs one. If they issue one, `export KITE_ALGO_ID=...` and every order carries it. |
 
-Data: live cycles should use `--provider kite` (needs the paid data plan) so
-the scan, the live price check and the orders all come from the same source.
+**Groww**, if you trade through it instead:
+
+| Item | Notes |
+|---|---|
+| Groww trading-API subscription | Check current pricing and entitlements on Groww's developer console. |
+| Static IP | SEBI's framework expects API orders from a registered static IP — check how Groww registers yours. |
+| DDPI | Same reason as Zerodha: automated sells of delivery holdings. |
+| Daily token | Mint `GROWW_ACCESS_TOKEN` yourself (SETUP.md §3b). Never store the TOTP seed — the adapter refuses to start if it sees one. |
+
+Data: use the same broker for data and orders (`--provider kite --broker kite`,
+or `--provider groww --broker groww`) so the scan, the live price check and the
+orders all see the same prices.
+
+### How protection differs between the two brokers
+
+| | Zerodha | Groww |
+|---|---|---|
+| Stop + target | One **GTT one-cancels-other** order, held by Zerodha | Groww offers OCO only for F&O and intraday, **not delivery** — so two separate **GTTs** (stop: DOWN trigger; target: UP trigger) |
+| When one fires | Zerodha cancels the other | **This system** cancels the other the moment it sees one leave ACTIVE (every cycle, and every minute under `watch`) |
+| Gap risk between the two | none | A few seconds: if price hits one leg and then the other before the system looks, the second sell targets shares already sold. For CNC that is rejected — **unless you hold more of that stock outside the system**, which it would then sell. Don't hand-trade the same stock in the account the system uses. |
+| Fill price after a trigger | Read from the order the GTT placed | Read from the order the GTT placed if Groww names it; else the single exact matching sell in today's order book; else **UNKNOWN** — the system alerts and you book it with `record-exit` from your contract note. It never guesses a price. |
+| Order rate | ≤ 5/second | ≤ 4/second (Groww's published order limit is 250/minute) |
+
+The Groww adapter was written against the `growwapi` 1.5.0 source and Groww's
+documented response fields, and tested against a fake client — like the Kite
+adapter, it has not yet placed an order on a real account. Run it first with a
+one-share position you are willing to lose, and watch every step.
 
 ## Daily routine
 
@@ -180,13 +216,15 @@ the scan, the live price check and the orders all come from the same source.
 
 **Live** — by hand, because each order needs you:
 
-1. ~09:00 — `python tools/kite_session.py`, export the token.
-2. ~09:20 — `python run_trader.py cycle --mode live --provider kite --backtest ...`.
+1. ~09:00 — mint today's token (`python tools/kite_session.py` for Zerodha; your
+   own token step for Groww) and export it.
+2. ~09:20 — `python run_trader.py cycle --mode live --broker kite --provider kite --backtest ...`
+   (or `--broker groww --provider groww`).
    It reconciles, scans on yesterday's completed bar, checks each name's live
    price against its stop, and asks you to confirm each order.
-3. Leave `python run_trader.py watch --mode live --provider kite` running until
-   15:30. It places the GTT stop/target the moment an entry fills and books exits
-   as they happen. **Without it, a position bought at 09:25 is unprotected until
+3. Leave `python run_trader.py watch --mode live --broker ... --provider ...` running
+   until 15:30. It places the stop/target the moment an entry fills, cancels the
+   surviving Groww leg the moment the other fires, and books exits as they happen. **Without it, a position bought at 09:25 is unprotected until
    the next cycle.**
 4. Anything odd: `python run_trader.py kill --reason "..."`. Then look.
 
@@ -203,6 +241,7 @@ the scan, the live price check and the orders all come from the same source.
 | `kill --reason R [--mode M]` | Engage the kill switch (all modes if no `--mode`) |
 | `release --reason R` | Release it (journaled) |
 | `flatten --mode M --reason R` | Exit everything at a marketable limit (live: type FLATTEN) |
+| `record-exit --trade-id T --qty N --price P --note S` | Book a fill the broker could not report, from your contract note. Sends nothing; journaled |
 | `replay --equity N [...]` | Walk the whole system through history |
 
 ## Known gaps — read before trusting it

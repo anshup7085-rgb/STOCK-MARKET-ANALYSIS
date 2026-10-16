@@ -441,6 +441,264 @@ def test_throttle_spaces_calls():
     assert len(slept) == 2 and all(abs(s - 0.2) < 1e-9 for s in slept)
 
 
+# -- Groww adapter, against a fake client -----------------------------------
+
+class FakeGroww:
+    """Mimics growwapi 1.5.0's call signatures and Groww's documented payloads."""
+
+    def __init__(self):
+        self.calls: list[tuple[str, dict]] = []
+        self.orders: dict[str, dict] = {}
+        self.by_ref: dict[str, str] = {}
+        self.smart: dict[str, dict] = {}
+        self.px = 1000.0
+        self._n = 0
+        self.place_status = "ACKED"
+
+    def get_instrument_by_exchange_and_trading_symbol(self, exchange, trading_symbol):
+        return {"tick_size": 0.1}
+
+    def place_order(self, **kw):
+        self.calls.append(("place_order", kw))
+        self._n += 1
+        oid = f"GMK{self._n}"
+        self.orders[oid] = {"groww_order_id": oid, "order_status": self.place_status,
+                            "filled_quantity": 0, "remark": "", **kw}
+        self.by_ref[kw["order_reference_id"]] = oid
+        return {"groww_order_id": oid, "order_status": self.place_status,
+                "order_reference_id": kw["order_reference_id"], "remark": "rejected by RMS"}
+
+    def get_order_status_by_reference(self, segment, order_reference_id):
+        if order_reference_id not in self.by_ref:
+            raise type("GrowwAPINotFoundException", (Exception,), {})("not found")
+        return {"groww_order_id": self.by_ref[order_reference_id]}
+
+    def get_order_detail(self, segment, groww_order_id):
+        return self.orders[groww_order_id]
+
+    def get_order_list(self, page=0, page_size=25, segment=None):
+        return {"order_list": list(self.orders.values())}
+
+    def cancel_order(self, groww_order_id, segment):
+        self.calls.append(("cancel_order", {"id": groww_order_id}))
+
+    def get_ltp(self, exchange_trading_symbols, segment):
+        return {k: self.px for k in exchange_trading_symbols}
+
+    def create_smart_order(self, **kw):
+        self.calls.append(("create_smart_order", kw))
+        self._n += 1
+        sid = f"gtt_{self._n}"
+        self.smart[sid] = {"smart_order_id": sid, "status": "ACTIVE", **kw}
+        return {"smart_order_id": sid, "smart_order_type": "GTT", "status": "ACTIVE"}
+
+    def get_smart_order(self, segment, smart_order_type, smart_order_id):
+        return self.smart[smart_order_id]
+
+    def get_smart_order_list(self, **kw):
+        return {"orders": [v for v in self.smart.values() if v["status"] == "ACTIVE"]}
+
+    def cancel_smart_order(self, segment, smart_order_type, smart_order_id):
+        self.calls.append(("cancel_smart_order", {"id": smart_order_id}))
+        self.smart[smart_order_id]["status"] = "CANCELLED"
+
+    def get_holdings_for_user(self):
+        return {"holdings": [{"trading_symbol": "TCS", "quantity": 10}]}
+
+    def get_positions_for_user(self, segment=None):
+        return {"positions": []}
+
+    def get_available_margin_details(self):
+        return {"clear_cash": 250000.0, "equity_margin_details": {"cnc_balance_available": 200000.0}}
+
+
+def groww(fake=None):
+    from trading.brokers.groww import GrowwBroker
+    return GrowwBroker(live_ack=True, max_orders_per_second=1000, client=fake or FakeGroww())
+
+
+def _open_trade(**kw):
+    df = frame([(100, 101, 99, 100)])
+    base = dict(symbol="TCS", status="OPEN", filled_qty=10, entry_price=1000.0, entry_limit=1000.0,
+                stop=960.0, stop_limit=950.4, target=1100.0, tag="AB2608030010TCS")
+    base.update(kw)
+    return make_trade(df, **base)
+
+
+def test_groww_refuses_without_ack_and_with_stored_2fa():
+    from trading.brokers.groww import GrowwBroker
+    try:
+        GrowwBroker(live_ack=False, max_orders_per_second=5, client=FakeGroww())
+        raise AssertionError("built a live Groww broker without the ack")
+    except BrokerError:
+        pass
+    os.environ["GROWW_TOTP_SECRET"] = "x"
+    try:
+        groww()
+        raise AssertionError("accepted a stored TOTP seed")
+    except BrokerError as exc:
+        assert "TOTP" in str(exc)
+    finally:
+        os.environ.pop("GROWW_TOTP_SECRET", None)
+
+
+def test_groww_entry_is_a_referenced_cnc_limit_and_idempotent():
+    fake = FakeGroww()
+    b = groww(fake)
+    t = _open_trade(status="PENDING_ENTRY", filled_qty=0, entry_limit=1003.37)
+    oid = b.submit_entry(t, session_open=True)
+    name, kw = fake.calls[-1]
+    assert name == "place_order"
+    assert (kw["order_type"], kw["product"], kw["segment"], kw["validity"], kw["exchange"]) == \
+        ("LIMIT", "CNC", "CASH", "DAY", "NSE")
+    assert kw["transaction_type"] == "BUY" and kw["order_reference_id"] == t.tag
+    assert kw["price"] == 1003.3, f"price must snap DOWN to the 0.1 tick: {kw['price']}"
+    n = len(fake.calls)
+    assert b.submit_entry(t, session_open=True) == oid
+    assert len(fake.calls) == n, "a resubmit after a crash must not send a second order"
+
+
+def test_groww_failed_reference_lookup_sends_nothing():
+    """Not knowing whether the order exists is not the same as knowing it doesn't."""
+    fake = FakeGroww()
+
+    def timeout(**kw):
+        raise RuntimeError("read timed out")
+    fake.get_order_status_by_reference = timeout
+    try:
+        groww(fake).submit_entry(_open_trade(status="PENDING_ENTRY", filled_qty=0), True)
+        raise AssertionError("sent an order after the duplicate check failed")
+    except BrokerError:
+        pass
+    assert not [c for c in fake.calls if c[0] == "place_order"]
+
+
+def test_groww_rejected_placement_is_an_error_not_an_order_id():
+    fake = FakeGroww()
+    fake.place_status = "FAILED"
+    try:
+        groww(fake).submit_entry(_open_trade(status="PENDING_ENTRY", filled_qty=0, tag="NEWTAG0001"), True)
+        raise AssertionError("a FAILED placement was returned as success")
+    except BrokerError as exc:
+        assert "FAILED" in str(exc)
+
+
+def test_groww_status_mapping():
+    from trading.brokers.groww import GrowwBroker
+    m = GrowwBroker._map
+    assert m({"order_status": "EXECUTED", "filled_quantity": 10, "average_fill_price": 99.5}).state == "COMPLETE"
+    assert m({"order_status": "DELIVERY_AWAITED"}).state == "COMPLETE"
+    assert m({"order_status": "FAILED"}).state == "REJECTED"
+    assert m({"order_status": "CANCELLED"}).state == "CANCELLED"
+    for st in ("NEW", "ACKED", "TRIGGER_PENDING", "APPROVED", "CANCELLATION_REQUESTED"):
+        assert m({"order_status": st}).state == "OPEN", st
+    assert m({"order_status": "SOMETHING_NEW"}).state == "UNKNOWN"
+
+
+def test_groww_protection_is_two_gtts_with_stable_references():
+    fake = FakeGroww()
+    b = groww(fake)
+    t = _open_trade()
+    pid = b.protect(t)
+    legs = [kw for name, kw in fake.calls if name == "create_smart_order"]
+    assert len(legs) == 2 and pid == "gtt_1|gtt_2"
+    stop, tgt = legs
+    assert stop["smart_order_type"] == "GTT" and stop["segment"] == "CASH" and stop["product_type"] == "CNC"
+    assert (stop["trigger_direction"], stop["trigger_price"]) == ("DOWN", "960.00")
+    assert stop["order"] == {"order_type": "LIMIT", "price": 950.4, "transaction_type": "SELL"}
+    assert (tgt["trigger_direction"], tgt["trigger_price"]) == ("UP", "1100.00")
+    assert tgt["order"]["price"] == 1100.0 and tgt["quantity"] == 10
+    assert stop["reference_id"] != tgt["reference_id"]
+    assert all(8 <= len(x["reference_id"]) <= 20 and x["reference_id"].isalnum() for x in legs)
+
+    # A crash before the ids were saved: the same references are found, not re-sent.
+    n = len(fake.calls)
+    assert b.protect(t) == pid
+    assert len([c for c in fake.calls[n:] if c[0] == "create_smart_order"]) == 0
+
+    fake.px = 955.0
+    try:
+        b.protect(_open_trade(tag="OTHERTAG0001"))
+        raise AssertionError("placed GTTs with price already through the stop")
+    except ProtectionImpossible as exc:
+        assert exc.side == "stop"
+
+
+def test_groww_triggered_stop_cancels_the_target_and_reads_the_fill():
+    fake = FakeGroww()
+    b = groww(fake)
+    t = _open_trade()
+    t.protection_id = b.protect(t)
+    assert b.protection_status(t).state == "ACTIVE"
+
+    fake.orders["GSELL1"] = {"groww_order_id": "GSELL1", "order_status": "EXECUTED",
+                             "filled_quantity": 10, "average_fill_price": 957.2}
+    fake.smart["gtt_1"].update(status="COMPLETED", groww_order_id="GSELL1")
+    p = b.protection_status(t)
+    assert p.state == "STOP_FILLED" and p.fill_price == 957.2 and p.filled_qty == 10
+    assert ("cancel_smart_order", {"id": "gtt_2"}) in fake.calls, "target GTT must be cancelled"
+    assert fake.smart["gtt_2"]["status"] == "CANCELLED"
+
+
+def test_groww_one_leg_gone_cancels_the_other_and_reports_cancelled():
+    fake = FakeGroww()
+    b = groww(fake)
+    t = _open_trade()
+    t.protection_id = b.protect(t)
+    fake.smart["gtt_2"]["status"] = "CANCELLED"     # deleted by hand in the app
+    p = b.protection_status(t)
+    assert p.state == "CANCELLED"
+    assert fake.smart["gtt_1"]["status"] == "CANCELLED", "the surviving stop must go too before re-placing"
+
+
+def test_groww_unidentifiable_trigger_is_unknown_never_guessed():
+    fake = FakeGroww()
+    b = groww(fake)
+    t = _open_trade()
+    t.protection_id = b.protect(t)
+    fake.smart["gtt_1"]["status"] = "COMPLETED"     # no order id anywhere, empty order book
+    p = b.protection_status(t)
+    assert p.state == "UNKNOWN" and p.fill_price is None and "record-exit" in p.message
+    # Two candidate sells in the book: still ambiguous, still UNKNOWN.
+    for oid in ("A1", "A2"):
+        fake.orders[oid] = {"groww_order_id": oid, "trading_symbol": "TCS", "transaction_type": "SELL",
+                            "product": "CNC", "order_status": "EXECUTED", "filled_quantity": 10,
+                            "average_fill_price": 958.0}
+    assert b.protection_status(t).state == "UNKNOWN"
+    del fake.orders["A2"]
+    p = b.protection_status(t)
+    assert p.state == "STOP_FILLED" and p.fill_price == 958.0, "exactly one exact match is accepted"
+
+
+def test_groww_account_reads_and_never_market():
+    fake = FakeGroww()
+    b = groww(fake)
+    assert b.available_cash() == 200000.0
+    assert b.holdings() == {"TCS": 10}
+    t = _open_trade()
+    b.submit_exit(t, 990.0, True, "AB2608030010TCSX1")
+    assert all(kw["order_type"] == "LIMIT" for name, kw in fake.calls if name == "place_order")
+
+
+def test_manual_exit_booking_closes_the_trade_and_is_journaled():
+    root = tmpdir()
+    eng = _engine(root, MockProvider())
+    book = eng.store.load()
+    t = _open_trade(trade_id="m1", entry_at="2026-08-03")
+    book.trades = {"m1": t}
+    eng.store.save(book)
+    try:
+        eng.record_manual_exit("m1", 11, 958.0, "stop", "contract note 123")
+        raise AssertionError("booked more shares than held")
+    except ValueError:
+        pass
+    eng.record_manual_exit("m1", 10, 958.0, "stop", "contract note 123", at="2026-08-05")
+    t = eng.store.load().trades["m1"]
+    assert t.status == "CLOSED" and t.exit_price == 958.0 and t.net_pnl < t.gross_pnl < 0
+    kinds = [r["type"] for r in eng.journal.records()]
+    assert "MANUAL_EXIT_RECORDED" in kinds and "TRADE_CLOSED" in kinds
+
+
 # -- live opt-in ------------------------------------------------------------
 
 def _live_cfg() -> TradingConfig:

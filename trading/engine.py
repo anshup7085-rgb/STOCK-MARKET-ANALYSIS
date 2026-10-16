@@ -212,6 +212,30 @@ class TradingEngine:
             self.journal.append("WATCH", asof=today, actions=rep.actions, alerts=rep.alerts)
         return rep
 
+    def record_manual_exit(self, trade_id: str, qty: int, price: float, reason: str,
+                           note: str, at: str | None = None) -> CycleReport:
+        """
+        Book an exit the system could not read from the broker — a fill you saw
+        in the broker's order book or contract note. No order is sent. The
+        record is journaled with your note, so the book stays auditable.
+        """
+        book = self.store.load()
+        rep = CycleReport(mode=self.cfg.mode, started=datetime.now(IST).isoformat(timespec="seconds"))
+        t = book.trades.get(trade_id)
+        if t is None or t.status not in ("OPEN", "EXITING"):
+            raise ValueError(f"{trade_id}: no open trade with that id")
+        if qty <= 0 or qty > t.remaining_qty or price <= 0:
+            raise ValueError(f"qty must be 1..{t.remaining_qty} and price positive")
+        day = at or datetime.now(IST).date().isoformat()
+        self.journal.append("MANUAL_EXIT_RECORDED", asof=day, trade_id=trade_id, qty=qty,
+                            price=price, reason=reason, note=note)
+        self._book_exit(t, book, qty, price, day, reason, rep)
+        if t.status != "CLOSED":
+            t.status, t.exit_order_id = "OPEN", None
+        self.store.save(book)
+        rep.decision = "manual exit recorded"
+        return rep
+
     def flatten(self, reason: str, now: datetime | None = None) -> CycleReport:
         """Cancel every pending entry and exit every open position. Caller confirms first."""
         now = now or datetime.now(IST)
@@ -230,7 +254,7 @@ class TradingEngine:
                 except BrokerError as exc:
                     self._alert(rep, today, f"{t.symbol}: could not cancel protection — {exc}")
                     continue
-                t.protection_id = None
+                t.protection_id, t.protect_attempts = None, t.protect_attempts + 1
             self._exit(t, book, today, session_open, rep, "manual")
         self.store.save(book)
         rep.decision = "flatten submitted"
@@ -306,13 +330,13 @@ class TradingEngine:
             if t.remaining_qty > 0:
                 self._alert(rep, asof, f"{t.symbol}: UNPROTECTED — {p.message}. Sending an emergency exit.")
                 self.journal.append("PROTECTION_FAILED", asof=asof, trade_id=t.trade_id, message=p.message)
-                t.protection_id = None
+                t.protection_id, t.protect_attempts = None, t.protect_attempts + 1
                 self._exit(t, book, asof, session_open, rep, "emergency")
             return
         if p.state == "CANCELLED":
             self._alert(rep, asof, f"{t.symbol}: protective order gone ({p.message}) — re-placing it")
             self.journal.append("PROTECTION_LOST", asof=asof, trade_id=t.trade_id, message=p.message)
-            t.protection_id = None
+            t.protection_id, t.protect_attempts = None, t.protect_attempts + 1
             self._protect(t, book, asof, session_open, rep)
             return
         if p.state == "UNKNOWN":
@@ -322,7 +346,7 @@ class TradingEngine:
         if manage_time and p.state == "ACTIVE" and t.bars_held >= t.max_hold_bars:
             self.journal.append("TIME_STOP", asof=asof, trade_id=t.trade_id, bars_held=t.bars_held)
             self.broker.cancel_protection(t)
-            t.protection_id = None
+            t.protection_id, t.protect_attempts = None, t.protect_attempts + 1
             self._exit(t, book, asof, session_open, rep, "time")
 
     def _protect(self, t: Trade, book: Book, asof: str, session_open: bool, rep: CycleReport) -> None:

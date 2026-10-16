@@ -146,6 +146,10 @@ class Trade:
     exit_order_id: str | None = None
     exit_reason_pending: str | None = None
     exit_attempts: int = 0
+    # Bumped whenever a protective pair is discarded, so a broker that keys
+    # protective orders by reference id (Groww) gets fresh ids for the next
+    # pair — and the SAME ids when retrying a pair that was half placed.
+    protect_attempts: int = 0
     exits: list[ExitLeg] = field(default_factory=list)
 
     bars_held: int = 0

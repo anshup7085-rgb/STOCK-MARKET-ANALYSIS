@@ -71,6 +71,10 @@ can generate codes on demand defeats the second factor entirely. Type the code.
   explicitly blocked — the wrapper raises if anything reaches for them.
 - Your API secret and TOTP seed never enter this project.
 
+Live orders through Groww are a separate module, `trading/brokers/groww.py`,
+built only by the live path after the checks in `TRADING.md`. The data provider
+above stays read-only either way.
+
 **Response-shape caveat.** Groww documents a "V2" candle format but not its exact
 keys. `_to_frame` accepts the common shapes and **raises rather than guesses** if
 it recognises none. If it raises on your account, print the raw payload and widen
@@ -115,8 +119,8 @@ export MARKET_PROVIDER=kite
   module here.
 - `.env` is gitignored. Keep it that way.
 - Every module in `market/providers/` is read-only. Orders exist only in
-  `trading/brokers/kite.py`, which the live path builds after the checks in
-  `TRADING.md`.
+  `trading/brokers/kite.py` and `trading/brokers/groww.py`, which the live path
+  builds after the checks in `TRADING.md`.
 
 Automating the daily token means automating a 2FA login. Don't. Type it.
 
