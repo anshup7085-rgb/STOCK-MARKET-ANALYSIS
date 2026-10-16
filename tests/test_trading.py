@@ -23,6 +23,7 @@ import pandas as pd
 from market.backtest import net_r
 from market.calendar import load_calendar
 from market.config import IST
+from market.charges import round_trip_costs
 from market.corporate_actions import suspect_corporate_actions
 from market.providers.mock import MockProvider
 from market.scan import completed_daily_bars
@@ -796,6 +797,15 @@ def test_calendar_reads_holidays_and_reports_empty():
     assert not cal.is_trading_day(date(2026, 1, 25)), "Sunday"
     assert "UNVERIFIED" in cal.status()
     assert not load_calendar(tmpdir() / "missing.json").loaded
+
+
+def test_groww_fee_card_has_delivery_brokerage_floor_and_cap():
+    from market.charges import DELIVERY, GROWW_DELIVERY
+    small = round_trip_costs(100.0, 100.0, 10, GROWW_DELIVERY)       # Rs1,000 a leg: 0.1% = Rs1 -> floor Rs5
+    big = round_trip_costs(1000.0, 1000.0, 100, GROWW_DELIVERY)      # Rs1,00,000 a leg: 0.1% = Rs100 -> cap Rs20
+    assert abs(small.brokerage - 10.0) < 1e-9 and abs(big.brokerage - 40.0) < 1e-9
+    assert round_trip_costs(1000.0, 1000.0, 100, DELIVERY).brokerage == 0.0, "Zerodha card unchanged"
+    assert GROWW_DELIVERY.unverified()
 
 
 def test_backtest_net_r_is_below_gross():

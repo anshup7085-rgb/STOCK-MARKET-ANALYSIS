@@ -129,7 +129,7 @@ bad signal. The share of the model that had real data behind it is reported as
 says so instead of promoting the least-bad name.
 
 Known limitations — corporate actions detected but not adjusted, an NSE holiday
-calendar that ships empty until you fill it, no breadth data, and a score whose
+calendar not yet verified against the exchange, no breadth data, and a score whose
 predictive power on real data is still unmeasured — are documented in `SETUP.md`
 and `TRADING.md`. Read them.
 

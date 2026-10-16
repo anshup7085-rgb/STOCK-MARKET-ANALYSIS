@@ -55,6 +55,7 @@ class ChargeSchedule:
     gst_pct: float                     # on brokerage + exchange + SEBI
     dp_charge_per_sell: float          # flat, delivery sells only, GST-inclusive
     verified_on: str | None = None     # set this once YOU have checked it
+    brokerage_min: float = 0.0         # rupee floor per order, applied after the cap
 
     def unverified(self) -> bool:
         return self.verified_on is None
@@ -89,7 +90,26 @@ INTRADAY = ChargeSchedule(
     dp_charge_per_sell=0.0,
 )
 
-SCHEDULES = {"delivery": DELIVERY, "intraday": INTRADAY}
+# Groww charges brokerage on delivery too: the lower of Rs20 or 0.1% per
+# executed order, with a Rs5 floor, and a DP charge of about Rs20 + GST per
+# sell. Taken from Groww's help pages and fee-change write-ups in Oct 2026 —
+# unverified like the rest; check a Groww contract note and set verified_on.
+GROWW_DELIVERY = ChargeSchedule(
+    name="Groww — equity delivery (CNC)",
+    segment="delivery",
+    brokerage_pct=0.1,
+    brokerage_cap=20.0,
+    brokerage_min=5.0,
+    stt_buy_pct=0.1,
+    stt_sell_pct=0.1,
+    exchange_txn_pct=0.00297,
+    sebi_pct=0.0001,
+    stamp_duty_buy_pct=0.015,
+    gst_pct=18.0,
+    dp_charge_per_sell=23.6,
+)
+
+SCHEDULES = {"delivery": DELIVERY, "intraday": INTRADAY, "groww_delivery": GROWW_DELIVERY}
 
 
 @dataclass
@@ -127,6 +147,8 @@ def _leg_brokerage(turnover: float, sched: ChargeSchedule) -> float:
     b = turnover * sched.brokerage_pct / 100.0
     if sched.brokerage_cap is not None:
         b = min(b, sched.brokerage_cap)
+    if turnover > 0 and sched.brokerage_min:
+        b = max(b, sched.brokerage_min)
     return b
 
 

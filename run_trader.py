@@ -93,6 +93,7 @@ def _live_broker(cfg: TradingConfig, choice: str | None):
     if name == "groww":
         from trading.brokers.groww import GrowwBroker
         broker = GrowwBroker(live_ack=True, max_orders_per_second=cfg.max_orders_per_second)
+        cfg.segment = "groww_delivery"      # Groww's fee card, not Zerodha's
     else:
         from trading.brokers.kite import KiteBroker
         broker = KiteBroker(live_ack=True, max_orders_per_second=cfg.max_orders_per_second)

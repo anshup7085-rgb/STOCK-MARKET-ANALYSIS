@@ -256,9 +256,15 @@ one-share position you are willing to lose, and watch every step.
   protected only once `watch` (or the next cycle) sees it.
 - **Partial fills.** A partly filled entry is protected only once its order
   completes or expires at the close.
-- **Holiday calendar ships empty.** `data/nse_holidays.json` must be filled from
-  the NSE circular (Gate 2 checks it). Until then holidays are not known.
-- **Charge rates are unverified defaults.** Check `market/charges.py` against a
+- **Holiday calendar is unverified and short.** `data/nse_holidays.json` holds the
+  rest of 2026 from secondary sources that agreed with each other. Confirm it
+  against the NSE circular, add 2027 when published, and set `verified_on` — Gate 2
+  checks it.
+- **Charge rates are unverified defaults.** There are two fee cards in
+  `market/charges.py`: Zerodha-style (`delivery`, zero delivery brokerage) and
+  `groww_delivery` (lower of Rs20 or 0.1% per order, Rs5 floor, ~Rs20 + GST DP per
+  sell). The live path picks Groww's card automatically for `--broker groww`;
+  paper uses `CHARGE_SCHEDULE` (default `delivery`). Check each against a real
   contract note and set `verified_on`.
 - **Holdings reconciliation is approximate** and only raises alerts; a person
   resolves mismatches.

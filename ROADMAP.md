@@ -14,7 +14,7 @@ evidence is required before it touches money.
 | Market data | **Blocked** — 403 at the egress gateway for every financial host |
 | Does the score predict? | **Unknown** — the harness is ready and now reports R net of costs; the answer may be no |
 | Sector / breadth | Not built |
-| Tradability gates | Partial — corporate-action detection and a restricted list built; holiday calendar built but **empty** until filled from the NSE circular; F&O ban is not a cash-segment restriction |
+| Tradability gates | Partial — corporate-action detection and a restricted list built; holiday calendar built, holding the rest of 2026 from secondary sources and **unverified** until checked against the NSE circular; F&O ban is not a cash-segment restriction |
 | Portfolio correlation | Built — pre-trade, in the risk engine |
 | Execution | Built in `trading/` — paper by default; live gated on this ladder (see `TRADING.md`) |
 | Paper-trading loop | Built — real-time, hash-chained journal; Gate 2 reads it |

@@ -166,8 +166,9 @@ Read these before you trust an output.
   feeds this matters. Resolve a flagged name by hand.
 - **F&O ban list.** A ban stops new F&O positions, not cash-segment delivery
   trades. Put names you want to avoid in `data/restricted.txt`.
-- **NSE holiday calendar ships empty.** Fill `data/nse_holidays.json` from the NSE
-  circular and set `verified_on`; until then holidays are not checked.
+- **NSE holiday calendar is unverified.** `data/nse_holidays.json` holds the rest of
+  2026 from secondary sources; confirm it against the NSE circular, add 2027, and
+  set `verified_on`.
 - **Breadth is unavailable.** Advance/decline needs a feed this project lacks, so
   the regime call rests on the benchmark alone — a genuine weakness, since a
   benchmark can hold up while breadth rots underneath.

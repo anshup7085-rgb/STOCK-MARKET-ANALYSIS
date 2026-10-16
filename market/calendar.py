@@ -3,9 +3,10 @@ NSE trading calendar.
 
 Weekends are arithmetic. Holidays are data, and DATA_SOURCES.md governs data:
 the list lives in `data/nse_holidays.json` with a named source and a
-`verified_on` date, and it ships EMPTY rather than guessed. An empty calendar is
-reported as such everywhere it is used, so "no holiday known" is never mistaken
-for "no holiday".
+`verified_on` date. Nothing is guessed: dates enter it only with a named source,
+an unverified list reports itself as UNVERIFIED, and an empty one is reported as
+such everywhere it is used, so "no holiday known" is never mistaken for "no
+holiday".
 
 Fill it from the exchange's own circular (nseindia.com -> Circulars -> "Trading
 holidays for the calendar year"), then set `verified_on`.

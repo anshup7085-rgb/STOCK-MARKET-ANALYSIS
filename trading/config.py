@@ -84,7 +84,10 @@ class TradingConfig:
     stop_limit_buffer_pct: float = field(default_factory=lambda: _f("STOP_LIMIT_BUFFER_PCT", 1.0))
     exit_limit_buffer_pct: float = field(default_factory=lambda: _f("EXIT_LIMIT_BUFFER_PCT", 2.0))
     slippage_pct: float = field(default_factory=lambda: _f("SLIPPAGE_PCT", 0.05))
-    segment: str = "delivery"                 # CNC; the only segment this engine trades
+    # Charge schedule key in market/charges.SCHEDULES. CNC delivery is the only
+    # thing this engine trades; the key picks whose fee card applies.
+    # The live path switches it to "groww_delivery" when the broker is Groww.
+    segment: str = field(default_factory=lambda: os.getenv("CHARGE_SCHEDULE", "delivery"))
 
     # --- live-only ---------------------------------------------------------
     # Enter only while the session is open, so the last traded price can be
