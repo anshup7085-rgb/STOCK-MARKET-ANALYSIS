@@ -16,3 +16,4 @@ state/
 
 # research data cache (Yahoo history): reproducible from research/data.py, not committed
 research/cache/
+logs/

@@ -15,6 +15,7 @@ cp .env.example .env
 
 PYTHONPATH=. python3 tests/test_offline.py          # research layer, no network
 PYTHONPATH=. python3 tests/test_trading.py          # execution layer, no network
+PYTHONPATH=. python3 tests/test_research.py         # research timing, no network
 python run_scan.py --provider mock --symbols TCS INFY HAL   # wiring check
 python run_scan.py --symbols RELIANCE TCS HAL --json scans/today.json
 python run_backtest.py --symbols RELIANCE TCS HAL   # does the score predict?
@@ -32,6 +33,20 @@ python run_trader.py cycle --mode paper             # once a day, after 16:00 IS
 python run_trader.py status --mode paper
 python run_trader.py replay --equity 500000         # the whole system through history
 ```
+
+Pre-registered strategy research — rules and pass criteria committed before the
+data is touched (`research/PREREGISTRATION.md`), judged once:
+
+```bash
+python -m research.data                             # fetch and freeze the inputs, once
+python run_research.py all --json scans/research_AB.json
+```
+
+**Where it stands (2026-10-17): nothing here has a measured edge.** The score
+failed Gate 1 (`reports/2026-10-17-gate1.md`); strategies A, B and B+A failed
+their pre-registered tests (`reports/2026-10-17-strategies-AB.md`). NO TRADE.
+
+A server for the paper loop: `deploy/setup_server.sh` (see `TRADING.md`).
 
 Full installation, provider setup and the daily Kite token flow: **`SETUP.md`**.
 Execution, live trading, what to pay for and the daily routine: **`TRADING.md`**.
@@ -78,7 +93,10 @@ trading/live.py          the live opt-in: ack phrase, gates, confirmation, polic
 trading/replay.py        the whole system walked through history
 trading/alerts.py        WhatsApp alerts; a phone call for urgent ones, WhatsApp if unanswered
 tools/kite_session.py    the daily manual Kite login, made less fiddly
-reports/                 rendered session reports
+run_research.py          CLI — the pre-registered strategies on the frozen data cache
+research/                PREREGISTRATION.md, frozen-input loader + MANIFEST.sha256, strategies A and B
+deploy/                  server setup script and the cron wrapper (paper only)
+reports/                 results reports (Gate 1, strategies A/B) and session reports
 ```
 
 ## How the score is built

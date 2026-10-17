@@ -215,12 +215,28 @@ one-share position you are willing to lose, and watch every step.
 
 ## Daily routine
 
-**Paper** — after the close, from cron on a machine with market data:
+**Paper** — after the close, from cron on a machine with market data. On a
+fresh Linux server (Ubuntu/Debian, Python 3.10+, an ordinary user account):
 
-```cron
-# 16:20 IST, Mon–Fri. Exit code 3 means alerts — wire it to mail or a notifier.
-20 16 * * 1-5  cd /path/to/repo && .venv/bin/python run_trader.py cycle --mode paper >> state/paper/cron.log 2>&1
+```bash
+git clone <repo> && cd <repo>
+deploy/setup_server.sh --paper-equity 500000 --install-cron
 ```
+
+It builds `.venv`, installs the requirements (`--broker kite` / `--broker groww`
+add the SDKs), runs the three test suites on that machine and checks that the
+market feed is reachable. It writes `~/.config/nse-trader/env` (mode 600, no
+secrets, for you to fill in), creates the paper book, and installs two cron jobs
+between marker lines, leaving your other jobs alone: the paper cycle at 16:20
+IST Mon–Fri, and `verify` of the journal on Saturdays. The server clock must be
+IST or UTC; any other clock is refused rather than guessed. Re-running it is
+safe. Logs go to `logs/` (kept 400 days). The journal in `state/` is the
+record.
+
+The script installs **no live job** and never sets `LIVE_TRADING_ACK`. A paper
+cycle runs whatever strategy `trading/strategy.py` holds — today that is the
+score Gate 1 retired, so a paper book now measures the plumbing (fills, alerts,
+journal) and gives a forward read on the score, not a strategy worth money.
 
 **Live** — by hand, because each order needs you:
 

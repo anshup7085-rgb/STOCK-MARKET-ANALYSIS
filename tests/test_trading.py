@@ -38,7 +38,7 @@ from trading.gates import gate2_paper
 from trading.journal import Journal, verify_file
 from trading.live import LIVE_ACK_PHRASE, LiveRefused, authorise_live
 from trading.models import Trade, TradeIntent, round_to_tick
-from trading.replay import ReplayProvider, run_replay
+from trading.replay import ReplayProvider, halt_summary, run_replay
 from trading.risk import KillSwitch, RiskContext, RiskEngine
 from trading.strategy import intents_from_scan
 
@@ -1291,6 +1291,22 @@ def test_engine_replay_invariants():
     for t in book.closed():
         assert t.charges > 0 and t.net_pnl < t.gross_pnl
     assert len({t.symbol for t in book.active()}) == len(book.active()), "two live trades in one name"
+
+
+def test_replay_reports_when_the_kill_switch_froze_it():
+    # Nobody releases the switch in a replay, so the summary must say from when
+    # it stood — otherwise a run halted in month 6 reads as ten years of trading.
+    root = tmpdir()
+    prov = ReplayProvider(MockProvider(), SYMS, lookback=300)
+    eng = _engine(root, prov)
+    dates = prov.session_dates()
+    reps = run_replay(lambda: eng, prov, dates[-20], dates[-11])
+    assert halt_summary(reps) is None
+    eng.kill.engage("test breaker")
+    reps += run_replay(lambda: eng, prov, dates[-10], None)
+    h = halt_summary(reps)
+    assert h["first_session"] == str(dates[-10]) and "test breaker" in h["reason"]
+    assert h["sessions_halted"] == 10 and h["sessions_total"] == 20
 
 
 def test_engine_rerun_on_the_same_bar_enters_nothing_new():

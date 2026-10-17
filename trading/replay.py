@@ -83,6 +83,25 @@ def run_replay(engine_factory, provider: ReplayProvider, start: date | None, end
     return reports
 
 
+def halt_summary(reports: list) -> dict | None:
+    """
+    When the kill switch first stood, and how many sessions it then covered.
+
+    Nobody releases the switch in a replay (release is a person's decision), so
+    a breaker that trips early freezes new entries for the rest of the history.
+    A summary that does not say so reads as N years of trading when it is not.
+    """
+    halted = [r for r in reports if r.kill]
+    if not halted:
+        return None
+    return {
+        "first_session": halted[0].asof,
+        "reason": halted[0].kill,
+        "sessions_halted": len(halted),
+        "sessions_total": len(reports),
+    }
+
+
 def replay_summary(book, journal_path: Path) -> dict:
     closed = book.closed()
     net = [t.net_r_multiple for t in closed if t.net_r_multiple is not None]

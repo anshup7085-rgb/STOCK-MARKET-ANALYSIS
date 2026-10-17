@@ -46,7 +46,7 @@ from trading.engine import TradingEngine
 from trading.gates import gate1_backtest, gate2_paper, gate3_live
 from trading.journal import Journal, verify_file
 from trading.live import LiveRefused, authorise_live
-from trading.replay import ReplayProvider, replay_summary, run_replay
+from trading.replay import ReplayProvider, halt_summary, replay_summary, run_replay
 from trading.risk import KillSwitch
 
 
@@ -376,7 +376,13 @@ def cmd_replay(args) -> int:
     summary = replay_summary(store.load(), cfg.journal_path)
     summary["provider"] = provider.name
     summary["sessions_replayed"] = len(reports)
+    summary["kill_switch"] = halt_summary(reports)
     print(json.dumps(summary, indent=2))
+    if summary["kill_switch"]:
+        h = summary["kill_switch"]
+        print(f"KILL SWITCH stood from {h['first_session']} for {h['sessions_halted']} of "
+              f"{h['sessions_total']} sessions: no new entries in that span, so these figures "
+              "do not describe the whole period.")
     if "MOCK" in provider.name.upper():
         print("SYNTHETIC DATA — this exercises the system, it says nothing about the market.")
     return 0
