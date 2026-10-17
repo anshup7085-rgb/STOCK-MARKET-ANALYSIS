@@ -12,7 +12,8 @@ cp .env.example .env
 ## 2. Verify the wiring before touching a real feed
 
 ```bash
-PYTHONPATH=. python3 tests/test_offline.py     # 16 tests, no network needed
+PYTHONPATH=. python3 tests/test_offline.py     # research layer, no network needed
+PYTHONPATH=. python3 tests/test_trading.py     # execution layer, no network needed
 python run_scan.py --provider mock --symbols TCS INFY HAL
 ```
 
@@ -70,6 +71,10 @@ can generate codes on demand defeats the second factor entirely. Type the code.
   explicitly blocked — the wrapper raises if anything reaches for them.
 - Your API secret and TOTP seed never enter this project.
 
+Live orders through Groww are a separate module, `trading/brokers/groww.py`,
+built only by the live path after the checks in `TRADING.md`. The data provider
+above stays read-only either way.
+
 **Response-shape caveat.** Groww documents a "V2" candle format but not its exact
 keys. `_to_frame` accepts the common shapes and **raises rather than guesses** if
 it recognises none. If it raises on your account, print the raw payload and widen
@@ -113,7 +118,9 @@ export MARKET_PROVIDER=kite
 - Your API *secret* is used once in the exchange above and is not stored by any
   module here.
 - `.env` is gitignored. Keep it that way.
-- Every module in `market/providers/` is read-only. Nothing can place an order.
+- Every module in `market/providers/` is read-only. Orders exist only in
+  `trading/brokers/kite.py` and `trading/brokers/groww.py`, which the live path
+  builds after the checks in `TRADING.md`.
 
 Automating the daily token means automating a 2FA login. Don't. Type it.
 
@@ -153,15 +160,20 @@ you'll need a CSV from the NSE site.
 
 Read these before you trust an output.
 
-- **No corporate-action handling.** Splits, bonuses and demergers will distort
-  history. `RISK_POLICY.md` says to reject unresolved corporate-action data; the
-  code does not yet detect it. Check manually.
-- **No F&O ban list.** A name in the ban period can score well and be untradeable.
-- **No NSE holiday calendar.** `market_status()` checks weekday and clock only.
+- **Corporate actions are detected, not adjusted.** `market/corporate_actions.py`
+  rejects any name whose history shows an overnight jump on a split/bonus ratio
+  (or an extreme gap). Kite and Groww candles are not split-adjusted, so on those
+  feeds this matters. Resolve a flagged name by hand.
+- **F&O ban list.** A ban stops new F&O positions, not cash-segment delivery
+  trades. Put names you want to avoid in `data/restricted.txt`.
+- **NSE holiday calendar is unverified.** `data/nse_holidays.json` holds the rest of
+  2026 from secondary sources; confirm it against the NSE circular, add 2027, and
+  set `verified_on`.
 - **Breadth is unavailable.** Advance/decline needs a feed this project lacks, so
   the regime call rests on the benchmark alone — a genuine weakness, since a
   benchmark can hold up while breadth rots underneath.
-- **Backtesting is not implemented.** The no-lookahead property is tested, so the
-  indicators are safe to backtest with, but the harness isn't written.
-- **Slippage and charges are excluded** from every max-loss figure. On a
-  high-volatility name they are not a rounding error.
+- **The backtest has not been run on real data.** The harness exists and reports
+  R both gross and net of modelled charges and slippage; ROADMAP Gate 1 needs it
+  run on a real feed.
+- **Charges are modelled with unverified default rates.** Check them against a
+  contract note.

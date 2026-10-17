@@ -1,0 +1,11 @@
+{
+  "_comment": "NSE equity-segment trading holidays. Weekend dates need not be listed. The entries below cover the REST OF 2026 only (from 2026-10-16), taken from secondary sources that all agreed: Angel One, Bajaj Broking, Kotak Neo, smallcase, Paytm Money, Choice (searched 2026-10-16). Earlier 2026 dates were left out: they are past, and sources disagreed on one. NOT verified against the exchange: check the NSE circular ('Trading holidays for the calendar year', nseindia.com -> Circulars), add 2027 when it is published, then set verified_on.",
+  "source": "secondary aggregators (Angel One, Bajaj Broking, Kotak Neo, smallcase, Paytm Money) \u2014 not the NSE circular",
+  "verified_on": null,
+  "holidays": {
+    "2026-10-20": "Dussehra",
+    "2026-11-10": "Diwali Balipratipada",
+    "2026-11-24": "Prakash Gurpurb Sri Guru Nanak Dev",
+    "2026-12-25": "Christmas"
+  }
+}

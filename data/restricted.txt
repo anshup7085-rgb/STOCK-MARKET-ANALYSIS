@@ -1,0 +1,13 @@
+# Symbols the trading engine must not open new positions in, one per line.
+#
+# Use it for anything that makes a name untradeable or unsafe for this strategy
+# that the price feed cannot see: ASM/GSM surveillance stages, trade-to-trade
+# (BE/BZ series), suspension, a pending corporate action you have not resolved,
+# or simply "not this one". Text after '#' is a comment — write down why.
+#
+# Note: the F&O ban list restricts NEW F&O positions only. This engine trades the
+# cash segment (CNC delivery), which a ban does not block, so a ban is a context
+# signal here rather than a hard restriction. Add a banned name below only if you
+# want to avoid it anyway.
+#
+# EXAMPLE      # reason, source, date

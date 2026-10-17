@@ -1,8 +1,10 @@
 # Stock Market Analysis — NSE research agent
 
-An evidence-driven market-intelligence and trading-research kit for NSE equities.
-A Python scanner does the arithmetic; an agent does the judgement. It is
-**read-only by design** — no module places, modifies or cancels an order.
+An evidence-driven market-intelligence and trading system for NSE equities.
+A Python scanner does the arithmetic; an agent does the judgement; a gated
+execution layer acts on the plan. The research half (`market/`) is **read-only
+by design**. Orders exist only in `trading/` — paper by default, live only
+through the opt-in, evidence gates and per-order confirmation in **`TRADING.md`**.
 
 ## Quick start
 
@@ -11,7 +13,8 @@ python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env
 
-PYTHONPATH=. python3 tests/test_offline.py          # 26 tests, no network
+PYTHONPATH=. python3 tests/test_offline.py          # research layer, no network
+PYTHONPATH=. python3 tests/test_trading.py          # execution layer, no network
 python run_scan.py --provider mock --symbols TCS INFY HAL   # wiring check
 python run_scan.py --symbols RELIANCE TCS HAL --json scans/today.json
 python run_backtest.py --symbols RELIANCE TCS HAL   # does the score predict?
@@ -21,7 +24,17 @@ python run_scan.py --equity 500000 --json scans/today.json
 python render_plan.py scans/today.json > scans/today.md
 ```
 
+Paper trading — the system acting on its own plans, with simulated fills:
+
+```bash
+python run_trader.py init  --mode paper --equity 500000
+python run_trader.py cycle --mode paper             # once a day, after 16:00 IST
+python run_trader.py status --mode paper
+python run_trader.py replay --equity 500000         # the whole system through history
+```
+
 Full installation, provider setup and the daily Kite token flow: **`SETUP.md`**.
+Execution, live trading, what to pay for and the daily routine: **`TRADING.md`**.
 
 ## What each file is for
 
@@ -35,6 +48,7 @@ Full installation, provider setup and the daily Kite token flow: **`SETUP.md`**.
 | `OUTPUT_TEMPLATE.md` | The report shape |
 | `SETUP.md` | Install, providers, credentials, known limitations |
 | `ROADMAP.md` | Current state, the evidence gates before live capital, kill criteria |
+| `TRADING.md` | The execution layer: modes, risk controls, live setup, daily routine |
 
 ## Code layout
 
@@ -42,6 +56,10 @@ Full installation, provider setup and the daily Kite token flow: **`SETUP.md`**.
 run_scan.py              CLI — walks the checklist, emits JSON
 run_backtest.py          CLI — walk-forward test of whether the score predicts
 render_plan.py           CLI — scan JSON into a readable structured trade plan
+run_trader.py            CLI — the trading system: init, cycle, watch, status, gates, replay, kill
+market/scan.py           the scan pipeline, shared by run_scan.py and the trading engine
+market/calendar.py       NSE holiday calendar (data/nse_holidays.json — fill from the circular)
+market/corporate_actions.py  flags unadjusted splits/bonuses from price fingerprints
 market/charges.py        Indian equity costs, net R:R, breakeven win rate
 market/config.py         thresholds and settings; secrets read from env only
 market/indicators.py     causal indicators + confirmed swing structure
@@ -50,6 +68,16 @@ market/score.py          transparent 0-85 model with per-component reasoning
 market/backtest.py       path simulation, score-band stats, rank correlation
 market/universe.py       candidate list, liquidity gate, regime classifier
 market/providers/        yfinance (free, EOD) | groww | kite (intraday + OI) | mock
+trading/engine.py        the daily cycle: scan, reconcile, breakers, entries, journal
+trading/risk.py          pre-trade risk engine, circuit breakers, kill switch
+trading/strategy.py      scan candidates into sized intents (sized on net loss)
+trading/brokers/         paper (simulated fills) | kite (live: LIMIT + GTT OCO) | groww (live: LIMIT + paired GTTs)
+trading/journal.py       hash-chained, append-only audit log
+trading/gates.py         ROADMAP Gates 1-3 evaluated from recorded evidence
+trading/live.py          the live opt-in: ack phrase, gates, confirmation, policy
+trading/replay.py        the whole system walked through history
+trading/alerts.py        WhatsApp alerts; a phone call for urgent ones, WhatsApp if unanswered
+tools/kite_session.py    the daily manual Kite login, made less fiddly
 reports/                 rendered session reports
 ```
 
@@ -101,8 +129,9 @@ bad signal. The share of the model that had real data behind it is reported as
 **NO TRADE is a valid output.** If nothing clears the score floor, the scanner
 says so instead of promoting the least-bad name.
 
-Known limitations — no corporate-action handling, no F&O ban list, no NSE
-holiday calendar, no breadth data, no backtest harness, and slippage and charges
-excluded from every max-loss figure — are documented in `SETUP.md`. Read them.
+Known limitations — corporate actions detected but not adjusted, an NSE holiday
+calendar not yet verified against the exchange, no breadth data, and a score whose
+predictive power on real data is still unmeasured — are documented in `SETUP.md`
+and `TRADING.md`. Read them.
 
 This is decision support, not investment advice, and not a guarantee of returns.
