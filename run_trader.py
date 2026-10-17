@@ -38,7 +38,7 @@ from market.universe import DEFAULT_UNIVERSE
 from trading.book import BookStore
 from trading.brokers.base import BrokerError
 from trading.brokers.paper import PaperBroker
-from trading.config import TradingConfig
+from trading.config import ConfigError, TradingConfig
 from trading.confirm import SimulatedConfirmer
 from trading.engine import TradingEngine
 from trading.gates import gate1_backtest, gate2_paper, gate3_live
@@ -66,6 +66,11 @@ def _engine(cfg: TradingConfig, args, reduce_only: bool = False) -> TradingEngin
         broker = _live_broker(cfg, args.broker)
         confirmer = auth.confirmer
     else:
+        if (args.provider or settings.provider or "").strip().lower() in ("mock", "synthetic"):
+            # The paper journal is the evidence Gate 2 reads. Synthetic prices
+            # must never enter it; use `replay --provider mock` to test wiring.
+            raise LiveRefused("the paper book refuses the mock provider — use "
+                              "`replay --provider mock` for a wiring check")
         provider = get_provider(args.provider)
         broker = PaperBroker(cfg.state_dir / "paper_broker.json", cfg.slippage_pct)
         confirmer = SimulatedConfirmer()
@@ -415,7 +420,11 @@ def main() -> int:
     p.set_defaults(fn=cmd_replay)
 
     args = ap.parse_args()
-    return args.fn(args)
+    try:
+        return args.fn(args)
+    except ConfigError as exc:
+        print(f"[refused] configuration: {exc}", file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":

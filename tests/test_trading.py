@@ -633,6 +633,20 @@ def test_paper_never_places_behind_a_bar_it_has_seen():
     assert b.orders[oid].placed_after == df.index[1].date().isoformat()
 
 
+def test_paper_order_placed_mid_session_cannot_fill_at_that_mornings_open():
+    b = PaperBroker(tmpdir() / "pb.json")
+    df = frame([(100, 101, 99, 100), (95, 101, 94, 100), (99, 101, 98, 100)])
+    d0, d1 = df.index[0].date(), df.index[1].date()
+    # 10:30 on d1: d1's bar is still forming, so the engine only sees d0 ...
+    b.sync({"TEST": df.iloc[:1]}, d0.isoformat(), now=datetime.combine(d1, time(10, 30), IST))
+    t = make_trade(df, symbol="TEST", signal_bar=d0.isoformat())
+    t.entry_order_id = b.submit_entry(t, session_open=True)
+    # ... and the 95 open of d1 printed before this order existed.
+    b.sync({"TEST": df}, df.index[-1].date().isoformat(), now=datetime.combine(df.index[-1].date(), time(16, 30), IST))
+    u = b.entry_status(t)
+    assert u.state == "COMPLETE" and u.at == df.index[2].date().isoformat() and u.avg_price > 95, u
+
+
 def test_journal_stays_intact_with_two_writers_and_survives_a_torn_line():
     path = tmpdir() / "j.jsonl"
     a, b = Journal(path, "paper"), Journal(path, "paper")
@@ -967,21 +981,33 @@ def test_live_risk_is_capped():
 # -- gates --------------------------------------------------------------------
 
 def test_gate2_counts_only_untampered_real_time_paper_trades():
+    from datetime import timedelta
     root = tmpdir()
+    today = date.today()
     hol = root / "hol.json"
-    hol.write_text(json.dumps({"source": "test", "verified_on": "2026-01-01",
-                               "holidays": {"2026-01-26": "Republic Day"}}))
+    hol.write_text(json.dumps({"source": "test", "verified_on": today.isoformat(),
+                               "holidays": {(today + timedelta(days=40)).isoformat(): "future"}}))
     os.environ["NSE_HOLIDAYS_FILE"] = str(hol)
+    real = "yfinance (Yahoo, EOD, delayed)"
     try:
         path = root / "paper" / "journal.jsonl"
         j = Journal(path, "paper")
         for i in range(60):
-            j.append("TRADE_CLOSED", asof="2026-08-03", net_r_multiple=0.3, net_pnl=100.0)
+            j.append("TRADE_CLOSED", asof=today.isoformat(), net_r_multiple=0.3, net_pnl=100.0,
+                     data_source=real)
         assert gate2_paper(path).passed, gate2_paper(path).text()
 
+        # Synthetic prices, backfilled history and replays are not evidence.
+        for label, src, asof in (("mock", "MOCK — synthetic data, NOT REAL", today.isoformat()),
+                                 ("backfilled", real, (today - timedelta(days=30)).isoformat()),
+                                 ("unnamed", None, today.isoformat())):
+            pj = Journal(root / f"{label}.jsonl", "paper")
+            for i in range(60):
+                pj.append("TRADE_CLOSED", asof=asof, net_r_multiple=0.3, net_pnl=100.0, data_source=src)
+            assert not gate2_paper(root / f"{label}.jsonl").passed, f"{label} trades counted as evidence"
         rj = Journal(root / "replay.jsonl", "replay")
         for i in range(60):
-            rj.append("TRADE_CLOSED", asof="2026-08-03", net_r_multiple=0.3, net_pnl=100.0)
+            rj.append("TRADE_CLOSED", asof=today.isoformat(), net_r_multiple=0.3, net_pnl=100.0, data_source=real)
         assert not gate2_paper(root / "replay.jsonl").passed, "replay trades are not paper evidence"
 
         lines = path.read_text().splitlines()
@@ -989,8 +1015,74 @@ def test_gate2_counts_only_untampered_real_time_paper_trades():
         rec["payload"]["net_r_multiple"] = 9.0
         path.write_text("\n".join(lines[:5] + [json.dumps(rec, sort_keys=True)] + lines[6:]) + "\n")
         assert not gate2_paper(path).passed, "a tampered journal must fail the gate"
+
+        hol.write_text(json.dumps({"source": "test", "verified_on": "2025-01-01",
+                                   "holidays": {"2025-01-26": "past only"}}))
+        clean = root / "clean.jsonl"
+        cj = Journal(clean, "paper")
+        for i in range(60):
+            cj.append("TRADE_CLOSED", asof=today.isoformat(), net_r_multiple=0.3, net_pnl=100.0, data_source=real)
+        assert not gate2_paper(clean).passed, "a calendar with no future dates must not pass"
     finally:
         os.environ.pop("NSE_HOLIDAYS_FILE", None)
+
+
+def test_gate1_wants_the_traded_strategy_and_independent_trades():
+    from trading.gates import gate1_backtest
+    root = tmpdir()
+    trades = [{"symbol": f"S{i % 10}", "entry_date": str(np.datetime64("2020-01-01") + 7 * (i // 10)),
+               "bars_held": 20} for i in range(400)]
+    res = {"provider": "yfinance", "direction": "long", "horizon": 20, "n_trades": 400,
+           "spearman": 0.3, "expectancy_net_r": 0.2, "trades": trades,
+           "bands": [{"label": "50-60", "n": 50, "mean_net_r": 0.1}, {"label": "60-70", "n": 50, "mean_net_r": 0.3}]}
+    p = root / "bt.json"
+    p.write_text(json.dumps(res))
+    g = gate1_backtest(p)
+    names = {c.name: c.status for c in g.checks}
+    assert names["n > 300 non-overlapping trades"] == "fail", "weekly entries with a 20-bar hold overlap"
+    assert g.stats["non_overlapping_trades"] < 400
+    res["direction"] = "short"
+    p.write_text(json.dumps(res))
+    assert {c.name: c.status for c in gate1_backtest(p).checks}["tests the traded strategy"] == "fail"
+
+
+def test_config_refuses_settings_that_would_switch_a_control_off():
+    from trading.config import ConfigError
+    for var, val in (("DAILY_LOSS_LIMIT_PCT", "nan"), ("RISK_PER_TRADE_PCT", "1,5"),
+                     ("MAX_ORDERS_PER_SECOND", "0"), ("MAX_DRAWDOWN_PCT", "-1")):
+        old = os.environ.get(var)
+        os.environ[var] = val
+        try:
+            TradingConfig()
+            raise AssertionError(f"{var}={val} was accepted")
+        except ConfigError:
+            pass
+        finally:
+            os.environ.pop(var, None)
+            if old is not None:
+                os.environ[var] = old
+
+
+def test_nan_correlation_is_unmeasurable_not_safe():
+    eng, book = RiskEngine(TradingConfig()), fresh_book()
+    df = frame([(100, 101, 99, 100)] * 2)
+    book.trades["x"] = make_trade(df, symbol="INFY", status="OPEN", filled_qty=10, entry_price=100.0)
+    flat = pd.Series([0.0] * 80)                      # a held name that never moved
+    other = pd.Series(np.random.default_rng(3).normal(0, 0.01, 80))
+    d = eng.check_entry(intent(), book, ctx(returns={"TCS": other, "INFY": flat}))
+    assert "correlation" in [f.name for f in d.failures], d.summary()
+
+
+def test_paper_book_refuses_mock_data():
+    import subprocess
+    import sys
+    env = dict(os.environ, TRADING_STATE_DIR=str(tmpdir()))
+    repo = str(Path(__file__).resolve().parent.parent)
+    subprocess.run([sys.executable, "run_trader.py", "init", "--mode", "paper", "--equity", "100000"],
+                   cwd=repo, env=env, check=True, capture_output=True)
+    r = subprocess.run([sys.executable, "run_trader.py", "cycle", "--mode", "paper", "--provider", "mock"],
+                       cwd=repo, env=env, capture_output=True, text=True)
+    assert r.returncode == 2 and "mock" in r.stderr, (r.returncode, r.stderr)
 
 
 # -- market-side additions ----------------------------------------------------

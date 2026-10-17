@@ -213,6 +213,9 @@ class RiskEngine:
                 thin.append(h)
                 continue
             c = float(joined["a"].corr(joined["b"]))
+            if c != c:          # NaN: a flat or broken series cannot be measured
+                thin.append(h)
+                continue
             if c > worst:
                 worst_sym, worst = h, c
         if thin:

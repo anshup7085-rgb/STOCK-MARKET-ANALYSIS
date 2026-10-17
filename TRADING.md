@@ -34,8 +34,13 @@ Once per trading day, `run_trader.py cycle`:
 
 ## The strategy, precisely
 
-It is what `run_scan.py` describes and `run_backtest.py` measures, so paper and
-live results are evidence about the thing that was tested.
+It uses the levels, target and time exit `run_scan.py` prints and
+`run_backtest.py` measures. It is **not identical** to the backtest: the
+backtest enters at the signal bar's close and takes every scored setup, while
+the system enters with a limit order next session (which may not fill) and only
+trades names that pass the net R:R floor and every risk limit. Gate 1 asks
+whether the *score* predicts; `replay` measures *this system*, and paper trading
+measures it forward.
 
 | | |
 |---|---|
@@ -96,8 +101,11 @@ because that is what a real stop-limit does. The engine then sends an emergency
 exit, as it would live.
 
 Run it daily from cron (an example is under the daily routine below). The paper
-journal is the evidence Gate 2 reads, and it only counts trades journaled in
-real time.
+journal is the evidence Gate 2 reads, so it is strict about what counts: only
+trades on a **real** data feed (the paper book refuses `--provider mock`; use
+`replay --provider mock` for wiring checks), journaled within five days of the
+market date they concern. A week of missed cron runs costs evidence rather than
+inventing it.
 
 ### Replay — the system through history
 
@@ -222,10 +230,14 @@ one-share position you are willing to lose, and watch every step.
    (or `--broker groww --provider groww`).
    It reconciles, scans on yesterday's completed bar, checks each name's live
    price against its stop, and asks you to confirm each order.
-3. Leave `python run_trader.py watch --mode live --broker ... --provider ...` running
-   until 15:30. It places the stop/target the moment an entry fills, cancels the
-   surviving Groww leg the moment the other fires, and books exits as they happen. **Without it, a position bought at 09:25 is unprotected until
-   the next cycle.**
+3. Leave `python run_trader.py watch --mode live --broker ... --provider ...` running.
+   It places the stop/target the moment an entry fills, cancels the surviving
+   Groww leg the moment the other fires, books exits as they happen, cancels a
+   stranded stop leg so an emergency exit can go out, and makes one settling
+   pass at 15:40 before it ends — Kite's order book only lasts the day.
+   **Without it, a position bought at 09:25 is unprotected until the next cycle.**
+   `watch` and `flatten` only reduce risk, so they need the ack phrase but not
+   the evidence gates.
 4. Anything odd: `python run_trader.py kill --reason "..."`. Then look.
 
 ## Commands
@@ -271,6 +283,13 @@ one-share position you are willing to lose, and watch every step.
 - **No notifications.** Exit code 3 signals alerts; hook it to whatever you read.
 - **Corporate actions** are detected from price fingerprints and rejected, not
   adjusted.
+- **No live entries the morning after a long weekend.** Staleness is measured in
+  calendar days, so on a Tuesday after a Monday holiday yesterday's "last
+  completed bar" is four-plus days old and every name is rejected as stale. The
+  system errs to NO TRADE that morning.
+- **An order call that fails has an unknown outcome.** The engine asks the
+  broker for the order's tag and adopts it if it landed; when the broker cannot
+  say, the trade waits up to two minutes for the next reconcile to settle it.
 
 ## State layout
 

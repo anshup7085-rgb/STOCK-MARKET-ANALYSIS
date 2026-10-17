@@ -8,8 +8,9 @@ Every limit is a ceiling the risk engine enforces, not a suggestion it reports.
 
 from __future__ import annotations
 
+import math
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from pathlib import Path
 
 from market.config import Thresholds
@@ -22,12 +23,22 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 EXCHANGE_OPS_THRESHOLD = 10.0
 
 
+class ConfigError(ValueError):
+    """A setting that cannot be trusted. Refuse to run rather than guess."""
+
+
 def _f(name: str, default: float) -> float:
     raw = os.getenv(name)
-    try:
-        return float(raw) if raw not in (None, "") else default
-    except ValueError:
+    if raw in (None, ""):
         return default
+    try:
+        v = float(raw)
+    except ValueError:
+        # "1,5" quietly becoming the default could be LOOSER than intended.
+        raise ConfigError(f"{name}={raw!r} is not a number") from None
+    if not math.isfinite(v):
+        raise ConfigError(f"{name}={raw!r} is not a finite number")
+    return v
 
 
 def _i(name: str, default: int) -> int:
@@ -44,8 +55,10 @@ def _b(name: str, default: bool) -> bool:
 @dataclass
 class TradingConfig:
     mode: str = "paper"                      # paper | live | replay
+    # A relative TRADING_STATE_DIR resolves against the repo, not the shell's
+    # cwd: a `kill` typed from another directory must land where cron looks.
     state_root: Path = field(
-        default_factory=lambda: Path(os.getenv("TRADING_STATE_DIR", str(REPO_ROOT / "state")))
+        default_factory=lambda: _resolve(os.getenv("TRADING_STATE_DIR") or "state")
     )
 
     # --- per-trade and portfolio risk -------------------------------------
@@ -99,6 +112,26 @@ class TradingConfig:
 
     restricted_file: Path = field(default_factory=lambda: REPO_ROOT / "data" / "restricted.txt")
 
+    def __post_init__(self) -> None:
+        must_be_positive = (
+            "risk_per_trade_pct", "live_max_risk_per_trade_pct", "max_portfolio_risk_pct",
+            "max_single_position_pct", "max_open_positions", "max_new_entries_per_cycle",
+            "max_pair_correlation", "daily_loss_limit_pct", "max_drawdown_pct",
+            "max_orders_per_day", "max_orders_per_second", "min_net_rr", "max_hold_bars",
+            "slippage_pct", "stop_limit_buffer_pct", "exit_limit_buffer_pct",
+        )
+        for f in fields(self):
+            if f.name in must_be_positive:
+                v = getattr(self, f.name)
+                if not isinstance(v, (int, float)) or not math.isfinite(v) or v <= 0:
+                    raise ConfigError(
+                        f"{f.name}={v!r} must be a positive number — a zero or negative "
+                        "limit would switch a control off"
+                    )
+        if self.max_orders_per_second > EXCHANGE_OPS_THRESHOLD / 2:
+            raise ConfigError(f"max_orders_per_second={self.max_orders_per_second} exceeds the "
+                              f"{EXCHANGE_OPS_THRESHOLD / 2:g}/s ceiling")
+
     @property
     def state_dir(self) -> Path:
         return self.state_root / self.mode
@@ -124,6 +157,11 @@ class TradingConfig:
         if self.is_live:
             return min(self.risk_per_trade_pct, self.live_max_risk_per_trade_pct)
         return self.risk_per_trade_pct
+
+
+def _resolve(p: str) -> Path:
+    path = Path(p).expanduser()
+    return path if path.is_absolute() else REPO_ROOT / path
 
 
 def load_restricted(path: Path) -> dict[str, str]:

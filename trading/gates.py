@@ -18,8 +18,11 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+from datetime import date
 from pathlib import Path
 from statistics import mean
+
+import numpy as np
 
 from market.calendar import load_calendar
 from trading.journal import verify_file
@@ -55,7 +58,31 @@ class GateReport:
 
 # ---------------------------------------------------------------------------
 
-def gate1_backtest(path: str | Path | None) -> GateReport:
+_NOT_REAL = ("MOCK", "SYNTHETIC", "REPLAY")
+
+
+def _non_overlapping(trades: list[dict]) -> int:
+    """
+    Trades that do not overlap in time within the same symbol. The harness
+    steps every 5 bars with a 20-bar horizon, so consecutive trades in one name
+    share most of their price path; ROADMAP's n > 300 is about independent
+    evidence, and overlapping trades are not.
+    """
+    by_sym: dict[str, list[dict]] = {}
+    for t in trades:
+        by_sym.setdefault(str(t.get("symbol")), []).append(t)
+    n = 0
+    for rows in by_sym.values():
+        free_from = None
+        for t in sorted(rows, key=lambda r: str(r.get("entry_date"))):
+            d = np.datetime64(str(t.get("entry_date"))[:10])
+            if free_from is None or d >= free_from:
+                n += 1
+                free_from = np.busday_offset(d, max(1, int(t.get("bars_held") or 1)), roll="forward")
+    return n
+
+
+def gate1_backtest(path: str | Path | None, horizon: int = 20) -> GateReport:
     g = GateReport("Gate 1 — research to paper (backtest)")
     if not path or not Path(path).exists():
         g.add("backtest result", False,
@@ -68,9 +95,16 @@ def gate1_backtest(path: str | Path | None) -> GateReport:
     net = res.get("expectancy_net_r")
     g.stats = {"provider": provider, "n_trades": n, "spearman": rho, "expectancy_net_r": net}
 
-    real = not any(x in provider.upper() for x in ("MOCK", "SYNTHETIC", "REPLAY"))
+    real = not any(x in provider.upper() for x in _NOT_REAL)
     g.add("real NSE data", real, f"provider: {provider or 'unknown'}")
-    g.add("n > 300 trades", n > 300, f"{n} trades")
+    same = res.get("direction") == "long" and int(res.get("horizon") or 0) == horizon
+    g.add("tests the traded strategy", same,
+          f"direction {res.get('direction')}, horizon {res.get('horizon')} "
+          f"(the system trades long with a {horizon}-bar time exit)")
+    indep = _non_overlapping(res.get("trades") or [])
+    g.stats["non_overlapping_trades"] = indep
+    g.add("n > 300 non-overlapping trades", indep > 300,
+          f"{indep} non-overlapping of {n} trades")
     g.add("Spearman > 0.15", rho is not None and rho > 0.15, f"Spearman {rho}")
     g.add("positive expectancy after costs", net is not None and net > 0,
           f"net expectancy {net}R" if net is not None else
@@ -114,8 +148,22 @@ def gate2_paper(journal_path: str | Path, min_trades: int = 60) -> GateReport:
     g.add("journal intact", v.ok and v.records > 0,
           f"{v.records} records, chain verifies" if v.ok and v.records else
           ("; ".join(v.problems[:3]) or "empty journal"))
-    closed = _closed(p, "paper")
-    late = [r for r in closed if str(r.get("ts", ""))[:10] < str(r.get("asof", ""))]
+    all_closed = _closed(p, "paper")
+    impossible = [r for r in all_closed if str(r.get("ts", ""))[:10] < str(r.get("asof", ""))]
+
+    def _counts(r: dict) -> bool:
+        src = str(r["payload"].get("data_source") or "")
+        if not src or any(x in src.upper() for x in _NOT_REAL):
+            return False           # evidence must name a real feed
+        try:
+            lag = (date.fromisoformat(str(r["ts"])[:10]) - date.fromisoformat(str(r["asof"])[:10])).days
+        except ValueError:
+            return False
+        return 0 <= lag <= 5       # journaled as it happened, not backfilled later
+
+    closed = [r for r in all_closed if _counts(r)]
+    excluded = len(all_closed) - len(closed)
+    late = impossible
     n = len(closed)
     net_rs = [r["payload"].get("net_r_multiple") for r in closed if r["payload"].get("net_r_multiple") is not None]
     exp = mean(net_rs) if net_rs else None
@@ -125,14 +173,18 @@ def gate2_paper(journal_path: str | Path, min_trades: int = 60) -> GateReport:
         "win_rate_pct": round(sum(1 for x in net_rs if x > 0) / len(net_rs) * 100, 1) if net_rs else None,
         "net_pnl": round(sum(r["payload"].get("net_pnl") or 0 for r in closed), 2),
     }
-    g.add(f">= {min_trades} paper trades", n >= min_trades, f"{n} closed paper trades")
+    g.add(f">= {min_trades} paper trades", n >= min_trades,
+          f"{n} closed paper trades on a real feed, journaled within 5 days"
+          + (f" ({excluded} more excluded: mock/replay data or backfilled)" if excluded else ""))
     g.add("logged in real time", not late,
           "every close was journaled on or after its market date" if not late else
           f"{len(late)} record(s) timestamped before their market date — impossible unless edited")
     g.add("positive paper expectancy after costs", exp is not None and exp > 0,
           f"{exp:+.3f}R per trade" if exp is not None else "no closed trades")
     cal = load_calendar()
-    g.add("NSE holiday calendar", cal.verified, cal.status())
+    ahead = [d for d in cal.holidays if d >= date.today().isoformat()]
+    g.add("NSE holiday calendar", cal.verified and bool(ahead),
+          cal.status() + ("" if ahead else " — no future dates; add the coming year"))
     g.add("corporate-action detection", True, "market/corporate_actions.py rejects suspects in every scan")
     g.add("F&O ban list", None,
           "this engine trades cash-segment delivery, which an F&O ban does not restrict; "

@@ -165,7 +165,7 @@ class TradingEngine:
             return rep
 
         # 2-3. sync and reconcile ---------------------------------------
-        self.broker.sync(bars, asof)
+        self.broker.sync(bars, asof, now=now)
         for s, df in bars.items():
             if not df.empty:
                 book.marks[s] = round(float(df["close"].iloc[-1]), 2)
@@ -600,6 +600,7 @@ class TradingEngine:
             net_r_multiple=t.net_r_multiple, planned_entry=t.entry_limit,
             reference_price=t.reference_price, stop=t.stop, target=t.target,
             signal_bar=t.signal_bar, score=t.score,
+            data_source=getattr(self.provider, "name", None),
         )
         rep.actions.append(
             f"{t.symbol}: CLOSED ({reasons}) {t.filled_qty} @ {entry} -> {t.exit_price:.2f}, "

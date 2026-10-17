@@ -1,8 +1,11 @@
 """
 From scan to sized, priced trade intents.
 
-The strategy is exactly what the scanner and the backtest describe, so that a
-paper or live result is evidence about the thing that was tested:
+The strategy uses the scanner's levels and the backtest's target and horizon.
+It differs from the backtest in two honest ways — entry is a next-session
+limit order that may not fill (the backtest enters at the signal close), and
+only names passing the net R:R floor and the risk limits trade — which is why
+`replay` exists to measure the system itself:
 
   - long only, cash segment (CNC delivery)
   - a buy LIMIT at the top of the scanner's entry zone, valid for one session

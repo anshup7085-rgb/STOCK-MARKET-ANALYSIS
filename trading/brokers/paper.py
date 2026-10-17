@@ -32,6 +32,7 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import asdict, dataclass
+from datetime import time
 from pathlib import Path
 
 import pandas as pd
@@ -91,6 +92,11 @@ class PaperBroker(Broker):
         # Last bar date seen per symbol. A symbol's data can run ahead of the
         # benchmark's; an order must never be placed behind a bar already seen.
         self.seen: dict[str, str] = {}
+        # Run during the session, today's bar is still forming and is not in
+        # `bars` — but today's OPEN has already happened. An order placed now
+        # must not fill at a price printed before it existed, so it waits for
+        # tomorrow's bar.
+        self.floor: str | None = None
         self._load()
 
     # -- persistence ------------------------------------------------------
@@ -122,12 +128,14 @@ class PaperBroker(Broker):
         return f"P{prefix}{self.seq:06d}"
 
     def _placed_after(self, t: Trade) -> str:
-        return max(filter(None, [self.asof, self.seen.get(t.symbol), t.signal_bar]))
+        return max(filter(None, [self.asof, self.seen.get(t.symbol), t.signal_bar, self.floor]))
 
     # -- simulation -------------------------------------------------------
 
-    def sync(self, bars: dict[str, pd.DataFrame], asof: str) -> None:
+    def sync(self, bars: dict[str, pd.DataFrame], asof: str, now=None) -> None:
         self.asof = asof
+        self.floor = (now.date().isoformat()
+                      if now is not None and now.time() >= time(9, 15) else None)
         for sym, df in bars.items():
             if df is not None and not df.empty:
                 self.seen[sym] = bar_date(df.index[-1]).isoformat()

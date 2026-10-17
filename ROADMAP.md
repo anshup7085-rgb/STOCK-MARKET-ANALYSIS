@@ -116,3 +116,35 @@ Two ways out:
 - **Paid** — Kite Connect, per `SETUP.md` §4. Adds intraday bars and real open
   interest, lifting the derivatives block from UNAVAILABLE. Costs a manual 2FA
   token each morning; do not automate that.
+
+## Blueprint — who does what, in order
+
+Written 2026-10-17, when the trading system (PR #1) was complete and unproven.
+Each step waits on the one before it. Every step ends at a gate that can say
+"stop" — and stopping is a valid result.
+
+| # | Step | Who | Done when | Stop if |
+|---|---|---|---|---|
+| 0 | Merge PR #1; allowlist the three Yahoo hosts above in this environment | **You** | Feed reachable | — |
+| 1 | **Gate 1** — run `run_backtest.py` on real NSE history and publish the number, whatever it is | Claude (once the feed is open), or you on your own machine | `run_trader.py gates --backtest F` passes Gate 1 | No relationship between score and outcome, or negative after costs — redesign the score before anything else |
+| 2 | Replay the whole system on the same history, both fee cards | Claude | Trades per month, net expectancy, worst drawdown known | Replay loses money after costs |
+| 3 | Small cloud server with a static IP; cron `cycle --mode paper` daily at 16:20 | **You** set it up; Claude writes the setup script | First real-time paper trade journaled | — |
+| 4 | **Gate 2** — 60 paper trades on a real feed, positive net expectancy; holiday calendar verified | Time | `gates` passes Gate 2 | Paper expectancy ≤ 0 |
+| 5 | Broker setup for live: Kite Connect and/or Groww API plan, static IP registered, DDPI, verified charge rates from a real contract note | **You** | One-share test order placed and protected by hand-watched `cycle` + `watch` | Any step of the order lifecycle misbehaves — fix before sizing up |
+| 6 | **Small live** — 0.25% risk per trade, every order typed back, one broker | **You** confirm each order | 40 live trades | Live diverges from paper by more than 0.3R, or drawdown breaches the plan |
+| 7 | **Gate 3** — then, and only then, consider raising risk or the signed autonomous policy | **You** decide | `gates` passes Gate 3 | — |
+
+Pace, honestly: on synthetic data the system closed about two trades a week.
+At that pace Gate 2's 60 paper trades take about seven months, and Gate 3's 40
+live trades another five. Step 2 will replace that guess with the real pace.
+The gates are not shortened to save time — see the note at the top of the
+promotion ladder.
+
+Building alongside (no gate needed, each as its own PR):
+
+- **Alerts** — cycle exit code 3 to Telegram or email, so an UNPROTECTED alert reaches a phone
+- **Server setup script** — venv, cron lines, log rotation, the 15:40 `watch` settling pass
+- **Breadth and sector rotation** — so the regime call stops resting on one index
+- **Holiday calendar from the exchange** — once NSE is reachable, fetch and verify instead of copying
+- **Trailing stops / partial exits at T1** — only if replay shows they help *after* costs
+- **Both brokers at once** — today a live book is bound to one broker

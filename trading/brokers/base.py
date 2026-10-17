@@ -66,7 +66,7 @@ class Broker(ABC):
     name: str = "abstract"
     is_live: bool = False
 
-    def sync(self, bars: dict[str, pd.DataFrame], asof: str) -> None:
+    def sync(self, bars: dict[str, pd.DataFrame], asof: str, now=None) -> None:
         """Advance any simulation to `asof`. Live brokers need nothing: the exchange is the simulator."""
 
     @abstractmethod
