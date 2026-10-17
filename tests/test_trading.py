@@ -329,10 +329,17 @@ class FakeKite:
 
     def place_gtt(self, **kw):
         self.calls.append(("place_gtt", kw))
+        self.gtts[77] = {"id": 77, "status": "active", "type": kw["trigger_type"],
+                         "condition": {"tradingsymbol": kw["tradingsymbol"],
+                                       "trigger_values": kw["trigger_values"]},
+                         "orders": kw["orders"]}
         return {"trigger_id": 77}
 
     def get_gtt(self, tid):
         return self.gtts[tid]
+
+    def get_gtts(self):
+        return list(self.gtts.values())
 
     def delete_gtt(self, tid):
         self.calls.append(("delete_gtt", {"id": tid}))
@@ -440,6 +447,219 @@ def test_throttle_spaces_calls():
     for _ in range(3):
         th.wait()
     assert len(slept) == 2 and all(abs(s - 0.2) < 1e-9 for s in slept)
+
+
+# -- review fixes: unknown outcomes, stranded legs, locking, flatten ----------
+
+def _live_engine(fake, root=None):
+    """An engine wired to a Kite adapter over a fake client, book marked for TCS."""
+    eng = _engine(root or tmpdir(), MockProvider(), broker=kite(fake))
+    book = eng.store.load()
+    book.marks["TCS"] = 997.0
+    eng.store.save(book)
+    return eng
+
+
+def _tcs_report():
+    lv = {"direction": "long", "entry_low": 990.1, "entry_high": 1003.37, "reference_price": 997.0,
+          "stop": 961.23, "target2": 1101.9, "target_basis": "structure"}
+    return _report_with(lv)
+
+
+class TimeoutKite(FakeKite):
+    """place_order lands at the broker, then the response times out."""
+
+    def place_order(self, **kw):
+        super().place_order(**kw)
+        raise TimeoutError("read timed out")
+
+
+def test_entry_timeout_after_acceptance_is_adopted_not_cancelled():
+    fake = TimeoutKite()
+    eng = _live_engine(fake)
+    book, rep = eng.store.load(), CycleReport(mode="paper", started="x")
+    eng._entries(book, _tcs_report(), {}, "2026-08-03", True, datetime.now(IST), rep)
+    (t,) = book.trades.values()
+    assert t.status == "PENDING_ENTRY" and t.entry_order_id == fake.book[-1]["order_id"], \
+        "an order the broker accepted must be tracked, not dropped"
+    assert "ORDER_ADOPTED" in [r["type"] for r in eng.journal.records()]
+
+
+def test_entry_failure_with_unknown_outcome_waits_then_resolves():
+    class DeadKite(FakeKite):
+        def place_order(self, **kw):
+            raise TimeoutError("read timed out")
+
+        def orders(self):
+            raise ConnectionError("network down")
+    fake = DeadKite()
+    eng = _live_engine(fake)
+    book, rep = eng.store.load(), CycleReport(mode="paper", started="x")
+    eng._entries(book, _tcs_report(), {}, "2026-08-03", True, datetime.now(IST), rep)
+    (t,) = book.trades.values()
+    assert t.status == "PENDING_ENTRY" and t.entry_order_id is None
+    assert "ORDER_SUBMIT_FAILED" in [r["type"] for r in eng.journal.records()]
+    fake.orders = lambda: []                                 # network back; nothing there
+    eng._reconcile(book, {}, "2026-08-03", True, rep, manage_time=False)
+    assert t.status == "PENDING_ENTRY", "inside the grace period it must not conclude yet"
+    t.created_at = "2026-08-03T09:20:00+05:30"
+    eng._reconcile(book, {}, "2026-08-03", True, rep, manage_time=False)
+    assert t.status == "CANCELLED"
+
+
+def test_exit_timeout_is_adopted_and_never_doubled():
+    fake = TimeoutKite()
+    eng = _live_engine(fake)
+    book, rep = eng.store.load(), CycleReport(mode="paper", started="x")
+    t = _open_trade(trade_id="x1")
+    book.trades = {"x1": t}
+    eng._exit(t, book, "2026-08-03", True, rep, "emergency")
+    assert t.status == "EXITING" and t.exit_order_id, "an accepted exit must be tracked"
+    sells = [kw for n, kw in fake.calls if n == "place_order" and kw["transaction_type"] == "SELL"]
+    assert len(sells) == 1
+
+
+def test_kite_adopts_an_existing_gtt_instead_of_stacking_another():
+    fake = FakeKite()
+    b = kite(fake)
+    t = _open_trade()
+    assert b.protect(t) == "77"
+    n = len([c for c in fake.calls if c[0] == "place_gtt"])
+    assert b.protect(t) == "77"
+    assert len([c for c in fake.calls if c[0] == "place_gtt"]) == n, "a second GTT was placed"
+
+
+def test_stranded_stop_leg_is_cancelled_so_an_emergency_exit_can_follow():
+    fake = FakeKite()
+    eng = _live_engine(fake)
+    book, rep = eng.store.load(), CycleReport(mode="paper", started="x")
+    t = _open_trade(trade_id="s1", protection_id="77")
+    book.trades = {"s1": t}
+    fake.book.append({"order_id": "555", "status": "OPEN", "filled_quantity": 0, "variety": "regular"})
+    fake.gtts[77] = {"status": "triggered", "orders": [
+        {"result": {"order_result": {"order_id": "555", "status": "success"}}}, {"result": None}]}
+    fake.px = 955.0                                          # above the 950.4 leg limit: let it work
+    eng._reconcile(book, {}, "2026-08-03", True, rep, manage_time=False)
+    assert not [c for c in fake.calls if c[0] == "cancel_order"]
+    fake.px = 940.0                                          # gapped through: the leg will never fill
+    eng._reconcile(book, {}, "2026-08-03", True, rep, manage_time=False)
+    assert ("cancel_order", {"variety": "regular", "order_id": "555"}) in fake.calls
+    assert any("UNPROTECTED" in a for a in rep.alerts)
+    fake.book[-1]["status"] = "CANCELLED"                   # next tick: leg dead -> emergency exit
+    eng._reconcile(book, {}, "2026-08-03", True, rep, manage_time=False)
+    assert t.status == "EXITING" and t.exit_reason_pending == "emergency"
+
+
+def test_watch_skips_a_tick_while_another_process_holds_the_book():
+    eng = _live_engine(FakeKite())
+    with eng.store.locked():
+        rep = eng.watch_once()
+    assert "busy" in rep.decision
+
+
+def test_watch_honours_the_kill_switch_for_pending_entries():
+    fake = FakeKite()
+    eng = _live_engine(fake)
+    book = eng.store.load()
+    t = _open_trade(trade_id="p1", status="PENDING_ENTRY", filled_qty=0, entry_order_id="9001")
+    book.trades = {"p1": t}
+    eng.store.save(book)
+    fake.book.append({"order_id": "9001", "status": "OPEN", "filled_quantity": 0, "variety": "regular"})
+    eng.kill.engage("test")
+    try:
+        rep = eng.watch_once()
+    finally:
+        eng.kill.release()
+    assert ("cancel_order", {"variety": "regular", "order_id": "9001"}) in fake.calls, rep.text()
+
+
+def test_flatten_exits_an_entry_that_filled_since_the_last_save():
+    fake = FakeKite()
+    eng = _live_engine(fake)
+    book = eng.store.load()
+    t = _open_trade(trade_id="f1", status="PENDING_ENTRY", filled_qty=0, entry_order_id="9002")
+    book.trades = {"f1": t}
+    eng.store.save(book)
+    fake.book.append({"order_id": "9002", "status": "COMPLETE", "filled_quantity": 10,
+                      "average_price": 1001.0, "variety": "regular"})
+    eng.flatten("test")
+    t = eng.store.load().trades["f1"]
+    assert t.status == "EXITING" and t.exit_reason_pending == "manual"
+
+
+def test_exit_rejected_three_times_stops_and_hands_over():
+    fake = FakeKite()
+    eng = _live_engine(fake)
+    book, rep = eng.store.load(), CycleReport(mode="paper", started="x")
+    t = _open_trade(trade_id="r1")
+    book.trades = {"r1": t}
+    for _ in range(5):
+        if t.status == "OPEN":
+            eng._exit(t, book, "2026-08-03", True, rep, "emergency")
+        fake.book[-1]["status"] = "REJECTED"
+        eng._reconcile_exit(t, book, "2026-08-03", True, rep) if t.status == "EXITING" else None
+    sells = [kw for n, kw in fake.calls if n == "place_order"]
+    assert len(sells) == 3 and any("EXIT BLOCKED" in a for a in rep.alerts)
+
+
+def test_r_is_measured_on_the_risk_the_trade_was_sized_on():
+    eng = _engine(tmpdir(), MockProvider())
+    book, rep = eng.store.load(), CycleReport(mode="paper", started="x")
+    # Planned 1000 -> stop 960 (40/share); gapped in at 962, stopped at 959.
+    t = _open_trade(trade_id="g1", entry_price=962.0, entry_limit=1000.0, entry_at="2026-08-03")
+    book.trades = {"g1": t}
+    eng._book_exit(t, book, 10, 959.0, "2026-08-04", "stop", rep)
+    assert abs(t.r_multiple - (959.0 - 962.0) / 40.0) < 1e-3, t.r_multiple
+
+
+def test_part_sold_trade_keeps_its_booked_profit_in_equity():
+    book = fresh_book(100_000.0)
+    t = _open_trade(trade_id="h1", entry_price=1000.0, entry_at="2026-08-03")
+    book.trades = {"h1": t}
+    book.marks["TCS"] = 1000.0
+    before = book.equity()
+    from trading.models import ExitLeg
+    t.exits.append(ExitLeg(qty=4, price=1100.0, at="2026-08-04", reason="target"))
+    assert abs(book.equity() - (before + 400.0)) < 1e-9
+    assert abs(book.available_capital() - (100_000.0 - 6 * 1000.0 + 400.0)) < 1e-9
+
+
+def test_paper_never_places_behind_a_bar_it_has_seen():
+    b = PaperBroker(tmpdir() / "pb.json")
+    df = frame([(100, 101, 99, 100), (100, 101, 99, 100)])
+    b.sync({"BENCH": df.iloc[:1], "TEST": df}, df.index[0].date().isoformat())
+    t = _open_trade(symbol="TEST", signal_bar=df.index[0].date().isoformat())
+    oid = b.submit_exit(t, 50.0, False, "TAG")
+    assert b.orders[oid].placed_after == df.index[1].date().isoformat()
+
+
+def test_journal_stays_intact_with_two_writers_and_survives_a_torn_line():
+    path = tmpdir() / "j.jsonl"
+    a, b = Journal(path, "paper"), Journal(path, "paper")
+    for i in range(3):
+        a.append("A", n=i)
+        b.append("B", n=i)
+    assert verify_file(path).ok, verify_file(path).problems
+    with path.open("a") as fh:
+        fh.write('{"seq": 7, "trunc')                       # killed mid-write
+    a.append("AFTER")                                        # must not crash
+    v = verify_file(path)
+    assert not v.ok and any("not valid JSON" in p for p in v.problems), v.problems
+    assert a.records()[-1]["type"] == "AFTER", "the record after a torn line must be readable"
+
+
+def test_reduce_only_live_authorisation_skips_the_gates_but_not_the_ack():
+    cfg = _live_cfg()
+    j = Journal(cfg.journal_path, "live")
+    try:
+        authorise_live(cfg, j, backtest_json=None, autonomous=False, override_reason=None,
+                       env={}, reduce_only=True)
+        raise AssertionError("reduce-only path skipped the ack")
+    except LiveRefused:
+        pass
+    auth = authorise_live(cfg, j, backtest_json=None, autonomous=False, override_reason=None,
+                          env={"LIVE_TRADING_ACK": LIVE_ACK_PHRASE}, reduce_only=True)
+    assert auth.gates == [] and not auth.overridden
 
 
 # -- Groww adapter, against a fake client -----------------------------------

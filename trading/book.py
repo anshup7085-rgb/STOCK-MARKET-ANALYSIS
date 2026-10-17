@@ -12,10 +12,12 @@ the broker's available cash is a second, independent ceiling on every order.
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import os
 import re
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -79,8 +81,19 @@ class Book:
 
     # -- money ------------------------------------------------------------
 
+    def _open_legs_pnl(self) -> float:
+        """Gross P&L already booked on the sold part of trades not yet closed."""
+        return sum(
+            leg.qty * (leg.price - t.entry_price)
+            for t in self.trades.values()
+            if t.status in ("OPEN", "EXITING") and t.entry_price is not None
+            for leg in t.exits
+        )
+
     def unrealised(self) -> float:
-        total = 0.0
+        """Marks on what is still held, plus the sold legs of trades not yet
+        closed (realised only when the whole trade closes and is charged)."""
+        total = self._open_legs_pnl()
         for t in self.trades.values():
             if t.status in ("OPEN", "EXITING") and t.entry_price is not None:
                 mark = self.marks.get(t.symbol, t.entry_price)
@@ -100,7 +113,10 @@ class Book:
         return total
 
     def available_capital(self) -> float:
-        return self.starting_equity + self.realised_net - self.committed_capital()
+        # Sold legs of an open trade released qty x entry from committed
+        # capital; their P&L is the rest of the cash they brought back.
+        return (self.starting_equity + self.realised_net - self.committed_capital()
+                + self._open_legs_pnl())
 
     def open_risk(self) -> float:
         return sum(t.open_risk() for t in self.active())
@@ -138,6 +154,30 @@ class BookStore:
 
     def exists(self) -> bool:
         return self.path.exists()
+
+    @contextmanager
+    def locked(self, blocking: bool = True):
+        """
+        Exclusive advisory lock on this book for the length of a
+        load-modify-save. `cycle`, `watch`, `flatten` and `record-exit` can run
+        in different processes; without this, the slower one saves a stale copy
+        over the other's work. Non-blocking callers get False and should skip.
+        """
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        fh = open(self.path.with_suffix(".lock"), "a+")
+        try:
+            flags = fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB)
+            try:
+                fcntl.flock(fh.fileno(), flags)
+            except BlockingIOError:
+                yield False
+                return
+            try:
+                yield True
+            finally:
+                fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+        finally:
+            fh.close()
 
     def create(self, mode: str, equity: float) -> Book:
         if self.path.exists():

@@ -93,6 +93,10 @@ class Broker(ABC):
     @abstractmethod
     def exit_status(self, t: Trade) -> OrderUpdate: ...
 
+    def cancel_order(self, order_id: str) -> None:
+        """Cancel one working order by id (a stranded protective leg, a stale exit)."""
+        raise BrokerError(f"{self.name} cannot cancel order {order_id} individually")
+
     # Optional surface — live brokers implement these, paper returns None.
 
     def find_order_by_tag(self, tag: str) -> str | None:

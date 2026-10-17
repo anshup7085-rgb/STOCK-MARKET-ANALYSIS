@@ -82,6 +82,7 @@ def authorise_live(
     override_reason: str | None,
     env: dict | None = None,
     confirmer: Confirmer | None = None,
+    reduce_only: bool = False,
 ) -> LiveAuthorisation:
     env = env if env is not None else dict(os.environ)
     if env.get("LIVE_TRADING_ACK", "").strip() != LIVE_ACK_PHRASE:
@@ -90,6 +91,12 @@ def authorise_live(
             f'  "{LIVE_ACK_PHRASE}"\n'
             "Set it yourself, in the shell that runs the system."
         )
+    if reduce_only:
+        # watch and flatten never add risk: they protect, book and close what
+        # is already open. The gates decide whether NEW risk may be taken, so
+        # they must not stand between an open position and its stop.
+        journal.append("LIVE_AUTHORISED", reduce_only=True)
+        return LiveAuthorisation(confirmer or TerminalConfirmer(), [], False, None)
 
     paper_journal = cfg.state_root / "paper" / "journal.jsonl"
     gates = [gate1_backtest(backtest_json), gate2_paper(paper_journal)]

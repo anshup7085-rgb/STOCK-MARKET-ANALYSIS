@@ -104,12 +104,20 @@ class KiteBroker(Broker):
         if self._ticks is None:
             try:
                 dump = self._call(self.k.instruments, self.exchange)
-                self._ticks = {
-                    str(i["tradingsymbol"]): float(i.get("tick_size") or 0.05) for i in dump
-                }
             except BrokerError:
-                self._ticks = {}
+                # Do not cache the failure: the next call retries the download.
+                # 0.05 is a multiple of every finer NSE tick, so it stays valid.
+                return 0.05
+            self._ticks = {
+                str(i["tradingsymbol"]): float(i.get("tick_size") or 0.05) for i in dump
+            }
         return self._ticks.get(symbol, 0.05)
+
+    def cancel_order(self, order_id: str) -> None:
+        o = self._history(str(order_id))
+        if self._map(o).state == "OPEN":
+            self.throttle.wait()
+            self._call(self.k.cancel_order, o.get("variety") or "regular", str(order_id))
 
     def _history(self, order_id: str) -> dict:
         hist = self._call(self.k.order_history, order_id)
@@ -196,6 +204,19 @@ class KiteBroker(Broker):
         except (KeyError, TypeError, ValueError):
             return None
 
+    def _find_gtt(self, t: Trade, stop: float, target: float) -> str | None:
+        """An ACTIVE two-leg GTT already protecting exactly this position."""
+        for g in self._call(self.k.get_gtts) or []:
+            cond = g.get("condition") or {}
+            legs = g.get("orders") or []
+            if (str(g.get("status") or "").lower() == "active"
+                    and g.get("type") == "two-leg"
+                    and cond.get("tradingsymbol") == t.symbol
+                    and [round(float(x), 2) for x in cond.get("trigger_values") or []] == [stop, target]
+                    and legs and all(int(x.get("quantity") or 0) == t.remaining_qty for x in legs)):
+                return str(g.get("id"))
+        return None
+
     def protect(self, t: Trade) -> str:
         ltp = self.last_price(t.symbol)
         if ltp is None:
@@ -206,6 +227,12 @@ class KiteBroker(Broker):
             raise ProtectionImpossible("target", ltp, f"LTP {ltp} already at/above target {t.target}")
         tick = self.tick_size(t.symbol)
         qty = t.remaining_qty
+        trig = [round_to_tick(t.stop, tick), round_to_tick(t.target, tick, "up")]
+        # A GTT placed by a call that timed out (or before a crash) is already
+        # protecting the position. Adopt it rather than stack a second one.
+        existing = self._find_gtt(t, *trig)
+        if existing:
+            return existing
         legs = [
             {"transaction_type": "SELL", "quantity": qty, "order_type": "LIMIT",
              "product": "CNC", "price": round_to_tick(t.stop_limit, tick, "down")},
@@ -213,15 +240,21 @@ class KiteBroker(Broker):
              "product": "CNC", "price": round_to_tick(t.target, tick, "up")},
         ]
         self.throttle.wait()
-        res = self._call(
-            self.k.place_gtt,
-            trigger_type="two-leg",
-            tradingsymbol=t.symbol,
-            exchange=self.exchange,
-            trigger_values=[round_to_tick(t.stop, tick), round_to_tick(t.target, tick, "up")],
-            last_price=ltp,
-            orders=legs,
-        )
+        try:
+            res = self._call(
+                self.k.place_gtt,
+                trigger_type="two-leg",
+                tradingsymbol=t.symbol,
+                exchange=self.exchange,
+                trigger_values=trig,
+                last_price=ltp,
+                orders=legs,
+            )
+        except BrokerError:
+            existing = self._find_gtt(t, *trig)
+            if existing:
+                return existing
+            raise
         tid = res.get("trigger_id") if isinstance(res, dict) else res
         if not tid:
             raise BrokerError("GTT accepted without a trigger_id — check the Kite GTT book by hand")
@@ -250,15 +283,19 @@ class KiteBroker(Broker):
                     "TRIGGERED_UNFILLED",
                     message=f"{kind} leg triggered but its order failed: "
                             f"{ores.get('rejection_reason') or ores.get('status')}",
+                    leg=kind,
                 )
             u = self._map(self._history(str(oid)))
             if u.state == "COMPLETE":
-                return ProtectionUpdate(f"{kind}_FILLED", u.avg_price, u.filled_qty, u.message, u.at)
+                return ProtectionUpdate(f"{kind}_FILLED", u.avg_price, u.filled_qty, u.message, u.at,
+                                        leg=kind, order_id=str(oid))
             if u.state == "OPEN":
                 return ProtectionUpdate("TRIGGERED_OPEN", u.avg_price, u.filled_qty,
-                                        f"{kind} leg order working: {u.message}", u.at)
+                                        f"{kind} leg order working: {u.message}", u.at,
+                                        leg=kind, order_id=str(oid))
             return ProtectionUpdate("TRIGGERED_UNFILLED", u.avg_price, u.filled_qty,
-                                    f"{kind} leg order {u.state}: {u.message}", u.at)
+                                    f"{kind} leg order {u.state}: {u.message}", u.at,
+                                    leg=kind, order_id=str(oid))
         return ProtectionUpdate("UNKNOWN", message="GTT triggered but no leg reported a result")
 
     def cancel_protection(self, t: Trade) -> None:

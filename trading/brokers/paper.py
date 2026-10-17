@@ -88,6 +88,9 @@ class PaperBroker(Broker):
         self.ocos: dict[str, SimOco] = {}
         self.seq = 0
         self.asof: str | None = None
+        # Last bar date seen per symbol. A symbol's data can run ahead of the
+        # benchmark's; an order must never be placed behind a bar already seen.
+        self.seen: dict[str, str] = {}
         self._load()
 
     # -- persistence ------------------------------------------------------
@@ -98,6 +101,7 @@ class PaperBroker(Broker):
         raw = json.loads(self.path.read_text())
         self.seq = raw.get("seq", 0)
         self.asof = raw.get("asof")
+        self.seen = raw.get("seen", {})
         self.orders = {k: SimOrder(**v) for k, v in raw.get("orders", {}).items()}
         self.ocos = {k: SimOco(**v) for k, v in raw.get("ocos", {}).items()}
 
@@ -107,6 +111,7 @@ class PaperBroker(Broker):
         tmp.write_text(json.dumps({
             "seq": self.seq,
             "asof": self.asof,
+            "seen": self.seen,
             "orders": {k: asdict(v) for k, v in self.orders.items()},
             "ocos": {k: asdict(v) for k, v in self.ocos.items()},
         }, indent=1))
@@ -117,12 +122,15 @@ class PaperBroker(Broker):
         return f"P{prefix}{self.seq:06d}"
 
     def _placed_after(self, t: Trade) -> str:
-        return max(filter(None, [self.asof, t.signal_bar]))
+        return max(filter(None, [self.asof, self.seen.get(t.symbol), t.signal_bar]))
 
     # -- simulation -------------------------------------------------------
 
     def sync(self, bars: dict[str, pd.DataFrame], asof: str) -> None:
         self.asof = asof
+        for sym, df in bars.items():
+            if df is not None and not df.empty:
+                self.seen[sym] = bar_date(df.index[-1]).isoformat()
         for o in [o for o in self.orders.values() if o.state == "OPEN" and o.side == "BUY"]:
             self._run_order(o, bars.get(o.symbol), asof)
         for oco in [x for x in self.ocos.values() if x.state == "ACTIVE"]:
@@ -256,7 +264,7 @@ class PaperBroker(Broker):
         x = SimOco(
             id=self._new_id("G"), symbol=t.symbol, qty=t.remaining_qty,
             stop=t.stop, stop_limit=t.stop_limit, target=t.target,
-            placed_after=self.asof or t.signal_bar,
+            placed_after=self._placed_after(t),
         )
         self.ocos[x.id] = x
         self._save()
@@ -278,7 +286,7 @@ class PaperBroker(Broker):
     def submit_exit(self, t: Trade, limit_price: float, session_open: bool, tag: str) -> str:
         o = SimOrder(
             id=self._new_id("X"), symbol=t.symbol, side="SELL", qty=t.remaining_qty,
-            limit=limit_price, placed_after=self.asof or t.signal_bar, tag=tag,
+            limit=limit_price, placed_after=self._placed_after(t), tag=tag,
         )
         self.orders[o.id] = o
         self._save()

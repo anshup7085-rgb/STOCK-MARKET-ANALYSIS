@@ -22,7 +22,7 @@ import pandas as pd
 
 from market.config import IST
 from market.providers.base import Bars, DataProvider, DataUnavailable
-from market.scan import bar_date
+from market.scan import bar_date, completed_daily_bars
 from market.universe import BENCHMARK
 
 
@@ -38,7 +38,8 @@ class ReplayProvider(DataProvider):
         self.asof: date | None = None
         for s in list(dict.fromkeys(list(symbols) + [BENCHMARK])):
             try:
-                df = inner.get_bars(s, "1d", lookback).df
+                # Started during the session, the newest bar is still forming.
+                df = completed_daily_bars(inner.get_bars(s, "1d", lookback).df, datetime.now(IST))
             except DataUnavailable as exc:
                 self.errors[s] = str(exc)
                 continue

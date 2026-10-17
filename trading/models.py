@@ -70,6 +70,8 @@ class ProtectionUpdate:
     filled_qty: int = 0
     message: str = ""
     at: str | None = None
+    leg: str | None = None        # "STOP" | "TARGET" once a leg has triggered
+    order_id: str | None = None   # the order a triggered leg placed, when known
 
 
 @dataclass
@@ -146,6 +148,10 @@ class Trade:
     exit_order_id: str | None = None
     exit_reason_pending: str | None = None
     exit_attempts: int = 0
+    exit_tag: str | None = None          # last exit tag sent; resolves an exit whose outcome is unknown
+    exit_tag_at: str | None = None       # wall-clock time that tag was sent
+    exit_limit: float | None = None      # limit of the working exit order
+    exit_rejections: dict[str, int] = field(default_factory=dict)   # date -> rejected exits that day
     # Bumped whenever a protective pair is discarded, so a broker that keys
     # protective orders by reference id (Groww) gets fresh ids for the next
     # pair — and the SAME ids when retrying a pair that was half placed.

@@ -210,9 +210,12 @@ class GrowwBroker(Broker):
         return self._map(self._detail(str(t.entry_order_id)))
 
     def cancel_entry(self, t: Trade) -> None:
-        if self.entry_status(t).state == "OPEN":
+        self.cancel_order(str(t.entry_order_id))
+
+    def cancel_order(self, order_id: str) -> None:
+        if self._map(self._detail(str(order_id))).state == "OPEN":
             self.throttle.wait()
-            self._call(self.g.cancel_order, groww_order_id=str(t.entry_order_id), segment=self.segment)
+            self._call(self.g.cancel_order, groww_order_id=str(order_id), segment=self.segment)
 
     # -- protection: two GTTs held together by this adapter ---------------
 
@@ -357,14 +360,15 @@ class GrowwBroker(Broker):
                         "check Groww's order book and book the fill with `run_trader.py record-exit`",
             )
         u = self._map(order)
+        oid = str(order.get("groww_order_id") or "") or None
         if u.state == "COMPLETE":
             return ProtectionUpdate(f"{kind}_FILLED", u.avg_price, u.filled_qty or t.remaining_qty,
-                                    u.message, u.at)
+                                    u.message, u.at, leg=kind, order_id=oid)
         if u.state == "OPEN":
             return ProtectionUpdate("TRIGGERED_OPEN", u.avg_price, u.filled_qty,
-                                    f"{kind} leg order working: {u.message}", u.at)
+                                    f"{kind} leg order working: {u.message}", u.at, leg=kind, order_id=oid)
         return ProtectionUpdate("TRIGGERED_UNFILLED", u.avg_price, u.filled_qty,
-                                f"{kind} leg order {u.state}: {u.message}", u.at)
+                                f"{kind} leg order {u.state}: {u.message}", u.at, leg=kind, order_id=oid)
 
     def cancel_protection(self, t: Trade) -> None:
         for sid in str(t.protection_id or "").split("|"):

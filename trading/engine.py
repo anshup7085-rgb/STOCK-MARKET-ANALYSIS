@@ -17,12 +17,18 @@ Ordering rules that matter:
     kill switch never removes a protective order.
   * Signals for a given completed bar are acted on once. Rerunning a cycle on
     the same bar manages positions but enters nothing new.
+  * A failed order call is an UNKNOWN outcome, never a rejection. A timeout can
+    arrive after the broker accepted the order, so the engine asks the broker
+    for the tag before concluding anything, and leaves the trade for the next
+    reconcile to settle when it cannot tell.
+  * cycle, watch, flatten and record-exit take an exclusive lock on the book,
+    so two of them can never overwrite each other's state.
 """
 
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import pandas as pd
 
@@ -39,6 +45,14 @@ from trading.journal import Journal
 from trading.models import ExitLeg, Trade, round_to_tick
 from trading.risk import KillSwitch, RiskContext, RiskEngine
 from trading.strategy import intents_from_scan
+
+# How long an order that failed to submit is given to appear in the broker's
+# order book before the engine concludes it was never placed.
+UNKNOWN_OUTCOME_GRACE = timedelta(minutes=2)
+
+# Rejected exits per trade per day before the engine stops resubmitting and
+# hands the position to a person.
+MAX_EXIT_REJECTIONS_PER_DAY = 3
 
 
 @dataclass
@@ -101,6 +115,10 @@ class TradingEngine:
     # ------------------------------------------------------------------
 
     def run_cycle(self, now: datetime | None = None) -> CycleReport:
+        with self.store.locked():
+            return self._run_cycle(now)
+
+    def _run_cycle(self, now: datetime | None = None) -> CycleReport:
         now = now or datetime.now(IST)
         cfg = self.cfg
         book = self.store.load()
@@ -199,14 +217,25 @@ class TradingEngine:
         they fill and books exits as they happen. Never enters anything.
         """
         now = now or datetime.now(IST)
-        book = self.store.load()
         rep = CycleReport(mode=self.cfg.mode, started=now.isoformat(timespec="seconds"))
         today = now.date().isoformat()
         rep.asof = today
-        session_open = market_status(now)["session_open"]
-        self._reconcile(book, {}, today, session_open, rep, manage_time=False)
-        self.store.save(book)
-        rep.equity = book.equity()
+        with self.store.locked(blocking=False) as got:
+            if not got:
+                # A cycle or flatten holds the book. Skip this tick rather than
+                # save a stale copy over whatever it is writing.
+                rep.decision = "watch: book busy (cycle or flatten running) — tick skipped"
+                return rep
+            book = self.store.load()
+            session_open = market_status(now)["session_open"]
+            self._reconcile(book, {}, today, session_open, rep, manage_time=False)
+            rep.kill = self.kill.engaged()
+            if rep.kill:
+                # The switch must bite during the session too: a pending BUY
+                # left working can still fill.
+                self._cancel_pending(book, today, rep, f"kill switch: {rep.kill}")
+            self.store.save(book)
+            rep.equity = book.equity()
         rep.decision = "watch: reconcile only"
         if rep.actions or rep.alerts:
             self.journal.append("WATCH", asof=today, actions=rep.actions, alerts=rep.alerts)
@@ -219,6 +248,10 @@ class TradingEngine:
         in the broker's order book or contract note. No order is sent. The
         record is journaled with your note, so the book stays auditable.
         """
+        with self.store.locked():
+            return self._record_manual_exit(trade_id, qty, price, reason, note, at)
+
+    def _record_manual_exit(self, trade_id, qty, price, reason, note, at) -> CycleReport:
         book = self.store.load()
         rep = CycleReport(mode=self.cfg.mode, started=datetime.now(IST).isoformat(timespec="seconds"))
         t = book.trades.get(trade_id)
@@ -238,12 +271,24 @@ class TradingEngine:
 
     def flatten(self, reason: str, now: datetime | None = None) -> CycleReport:
         """Cancel every pending entry and exit every open position. Caller confirms first."""
+        with self.store.locked():
+            return self._flatten(reason, now)
+
+    def _flatten(self, reason: str, now: datetime | None = None) -> CycleReport:
         now = now or datetime.now(IST)
         book = self.store.load()
         rep = CycleReport(mode=self.cfg.mode, started=now.isoformat(timespec="seconds"))
         today = now.date().isoformat()
         session_open = market_status(now)["session_open"]
         self.journal.append("FLATTEN", asof=today, reason=reason)
+        # Read every pending entry first: one that filled since the last save is
+        # a position to exit, not an order to cancel.
+        for t in list(book.active()):
+            if t.status == "PENDING_ENTRY":
+                try:
+                    self._reconcile_entry(t, book, today, rep)
+                except BrokerError as exc:
+                    self._alert(rep, today, f"{t.symbol}: could not read entry before flatten — {exc}")
         self._cancel_pending(book, today, rep, f"flatten: {reason}")
         for t in book.active():
             if t.status != "OPEN":
@@ -256,6 +301,10 @@ class TradingEngine:
                     continue
                 t.protection_id, t.protect_attempts = None, t.protect_attempts + 1
             self._exit(t, book, today, session_open, rep, "manual")
+        for t in book.active():
+            if t.status == "PENDING_ENTRY":
+                self._alert(rep, today, f"{t.symbol}: entry cancel requested but not yet confirmed — "
+                                        "re-run flatten once it settles in case it part-filled")
         self.store.save(book)
         rep.decision = "flatten submitted"
         return rep
@@ -278,9 +327,30 @@ class TradingEngine:
                 self._alert(rep, asof, f"{t.symbol}: broker error while reconciling — {exc}")
                 self.journal.append("BROKER_ERROR", asof=asof, trade_id=t.trade_id, error=str(exc))
 
+    def _lookup_tag(self, tag: str) -> str | None:
+        """The broker's id for an order with this tag, or None if it cannot say."""
+        try:
+            return self.broker.find_order_by_tag(tag)
+        except BrokerError:
+            return None
+
+    @staticmethod
+    def _within_grace(stamp: str | None) -> bool:
+        if not stamp:
+            return False
+        try:
+            t0 = datetime.fromisoformat(stamp)
+        except ValueError:
+            return False
+        if t0.tzinfo is None:
+            t0 = t0.replace(tzinfo=IST)
+        return datetime.now(IST) - t0 < UNKNOWN_OUTCOME_GRACE
+
     def _reconcile_entry(self, t: Trade, book: Book, asof: str, rep: CycleReport) -> None:
         if t.entry_order_id is None:
             oid = self.broker.find_order_by_tag(t.tag)
+            if not oid and self._within_grace(t.created_at):
+                return      # too soon to conclude it was never placed
             if not oid:
                 t.status = "CANCELLED"
                 self.journal.append("ENTRY_NEVER_SENT", asof=asof, trade_id=t.trade_id, tag=t.tag)
@@ -342,12 +412,46 @@ class TradingEngine:
         if p.state == "UNKNOWN":
             self._alert(rep, asof, f"{t.symbol}: protection status unreadable ({p.message}) — check by hand")
             return
+        if p.state == "TRIGGERED_OPEN":
+            # A leg fired and its LIMIT order is working. If the market is now
+            # below that limit it will not fill, and the position has no stop:
+            # cancel the leg so the next tick reads it dead and sends the
+            # emergency exit. Above the limit, let it work.
+            self._rescue_stranded_leg(t, p, asof, rep)
+            return
 
         if manage_time and p.state == "ACTIVE" and t.bars_held >= t.max_hold_bars:
             self.journal.append("TIME_STOP", asof=asof, trade_id=t.trade_id, bars_held=t.bars_held)
             self.broker.cancel_protection(t)
             t.protection_id, t.protect_attempts = None, t.protect_attempts + 1
             self._exit(t, book, asof, session_open, rep, "time")
+
+    def _ltp(self, symbol: str) -> float | None:
+        if not self.broker.is_live:
+            return None
+        try:
+            return self.broker.last_price(symbol)
+        except BrokerError:
+            return None
+
+    def _rescue_stranded_leg(self, t: Trade, p, asof: str, rep: CycleReport) -> None:
+        leg_px = t.target if p.leg == "TARGET" else t.stop_limit
+        ltp = self._ltp(t.symbol)
+        if ltp is None:
+            self._alert(rep, asof, f"{t.symbol}: {p.leg or 'protective'} leg triggered and working "
+                                    f"({p.message}); no live price to judge it — watch it by hand")
+            return
+        if ltp >= leg_px:
+            return
+        if not p.order_id:
+            self._alert(rep, asof, f"{t.symbol}: UNPROTECTED — {p.leg} leg rests at {leg_px} with LTP "
+                                    f"{ltp}, and its order id is unknown. Cancel it and exit by hand.")
+            return
+        self._alert(rep, asof, f"{t.symbol}: UNPROTECTED — {p.leg} leg rests at {leg_px} with LTP {ltp}; "
+                                "cancelling it so an emergency exit can go out")
+        self.journal.append("PROTECTION_STRANDED", asof=asof, trade_id=t.trade_id, leg=p.leg,
+                            order_id=p.order_id, leg_price=leg_px, ltp=ltp)
+        self.broker.cancel_order(p.order_id)
 
     def _protect(self, t: Trade, book: Book, asof: str, session_open: bool, rep: CycleReport) -> None:
         try:
@@ -370,8 +474,27 @@ class TradingEngine:
         )
 
     def _reconcile_exit(self, t: Trade, book: Book, asof: str, session_open: bool, rep: CycleReport) -> None:
+        if t.exit_order_id is None:
+            # The exit call failed with an unknown outcome. Ask for its tag.
+            oid = self.broker.find_order_by_tag(t.exit_tag) if t.exit_tag else None
+            if oid:
+                t.exit_order_id = oid
+                self.journal.append("ORDER_ADOPTED", asof=asof, trade_id=t.trade_id, tag=t.exit_tag, order_id=oid)
+            elif self._within_grace(t.exit_tag_at):
+                return
+            else:
+                self.journal.append("EXIT_NEVER_SENT", asof=asof, trade_id=t.trade_id, tag=t.exit_tag)
+                t.status = "OPEN"     # unprotected: the next pass re-protects or re-exits
+                return
         u = self.broker.exit_status(t)
         dead = u.state in ("CANCELLED", "EXPIRED", "REJECTED")
+        if u.state == "OPEN" and t.exit_limit is not None:
+            ltp = self._ltp(t.symbol)
+            if ltp is not None and ltp < t.exit_limit:
+                self._alert(rep, asof, f"{t.symbol}: exit limit {t.exit_limit} left behind (LTP {ltp}) — "
+                                        "cancelling to resend at a marketable price")
+                self.broker.cancel_order(str(t.exit_order_id))
+                return
         if u.state == "COMPLETE" or (dead and u.filled_qty > 0):
             self._book_exit(t, book, u.filled_qty or t.remaining_qty, u.avg_price, u.at or asof,
                             t.exit_reason_pending or "exit", rep)
@@ -381,9 +504,15 @@ class TradingEngine:
             self._alert(rep, asof, f"{t.symbol}: exit part-filled, {t.remaining_qty} left — retrying")
             self._exit(t, book, asof, session_open, rep, t.exit_reason_pending or "exit")
         elif dead:
-            self._alert(rep, asof, f"{t.symbol}: exit order {u.state.lower()} ({u.message}) — retrying")
             self.journal.append("EXIT_DEAD", asof=asof, trade_id=t.trade_id, state=u.state, message=u.message)
             t.status, t.exit_order_id = "OPEN", None
+            if u.state == "REJECTED":
+                t.exit_rejections[asof] = t.exit_rejections.get(asof, 0) + 1
+                if t.exit_rejections[asof] >= MAX_EXIT_REJECTIONS_PER_DAY:
+                    self._alert(rep, asof, f"{t.symbol}: EXIT BLOCKED — rejected {t.exit_rejections[asof]} "
+                                            f"times today ({u.message}). Act by hand.")
+                    return
+            self._alert(rep, asof, f"{t.symbol}: exit order {u.state.lower()} ({u.message}) — retrying")
             self._exit(t, book, asof, session_open, rep, t.exit_reason_pending or "exit")
 
     # ------------------------------------------------------------------
@@ -392,6 +521,8 @@ class TradingEngine:
 
     def _exit(self, t: Trade, book: Book, asof: str, session_open: bool, rep: CycleReport,
               reason: str, ref_price: float | None = None) -> None:
+        if t.exit_rejections.get(asof, 0) >= MAX_EXIT_REJECTIONS_PER_DAY:
+            return      # already handed to a person today; do not hammer the broker
         ref = ref_price
         if ref is None and self.broker.is_live:
             try:
@@ -399,8 +530,11 @@ class TradingEngine:
             except BrokerError:
                 ref = None
         ref = ref or book.marks.get(t.symbol) or t.entry_price or t.entry_limit
-        limit = round_to_tick(ref * (1 - self.cfg.exit_limit_buffer_pct / 100.0),
-                              self.broker.tick_size(t.symbol), "down")
+        try:
+            tick = self.broker.tick_size(t.symbol)
+        except BrokerError:
+            tick = 0.05
+        limit = round_to_tick(ref * (1 - self.cfg.exit_limit_buffer_pct / 100.0), tick, "down")
         t.exit_attempts += 1
         tag = f"{t.tag[:18]}X{t.exit_attempts % 10}"
         self.journal.append(
@@ -408,15 +542,23 @@ class TradingEngine:
             side="SELL", qty=t.remaining_qty, order_type="LIMIT", price=limit,
             product="CNC", reason=reason, session_open=session_open,
         )
+        t.exit_tag, t.exit_tag_at = tag, datetime.now(IST).isoformat(timespec="seconds")
         try:
             oid = self.broker.submit_exit(t, limit, session_open, tag)
         except BrokerError as exc:
-            self._alert(rep, asof, f"{t.symbol}: EXIT ORDER FAILED — {exc}")
-            self.journal.append("ORDER_REJECTED", asof=asof, trade_id=t.trade_id, tag=tag, error=str(exc))
-            if reason == "time":
-                self._protect(t, book, asof, session_open, rep)
-            return
-        t.exit_order_id, t.status, t.exit_reason_pending = oid, "EXITING", reason
+            oid = self._lookup_tag(tag)
+            if oid is None:
+                # Unknown outcome: it may be live. Park the trade as EXITING with
+                # no id; the next reconcile asks for the tag, and only once it is
+                # sure the order never landed does it re-protect or re-exit.
+                self._alert(rep, asof, f"{t.symbol}: exit submission failed — {exc}. Outcome unknown; "
+                                        f"tag {tag} is checked on the next pass.")
+                self.journal.append("ORDER_SUBMIT_FAILED", asof=asof, trade_id=t.trade_id, tag=tag, error=str(exc))
+                t.exit_order_id, t.status, t.exit_reason_pending, t.exit_limit = None, "EXITING", reason, limit
+                return
+            self.journal.append("ORDER_ADOPTED", asof=asof, trade_id=t.trade_id, tag=tag, order_id=oid,
+                                after_error=str(exc))
+        t.exit_order_id, t.status, t.exit_reason_pending, t.exit_limit = oid, "EXITING", reason, limit
         book.count_order(asof)
         self.journal.append("ORDER_ACK", asof=asof, trade_id=t.trade_id, tag=tag, broker_order_id=oid)
         rep.actions.append(f"{t.symbol}: {reason} exit sent — SELL {t.remaining_qty} LIMIT {limit}")
@@ -439,7 +581,10 @@ class TradingEngine:
         gross = sum(leg.qty * (leg.price - entry) for leg in t.exits)
         charges = sum(round_trip_costs(entry, leg.price, leg.qty, sched).total for leg in t.exits)
         net = gross - charges
-        risk_ps = entry - t.stop if entry > t.stop else t.entry_limit - t.stop
+        # R is measured on the per-share risk the position was SIZED on. Using
+        # the fill would let a gap-down entry (fill just above the stop) turn a
+        # small loss into a huge negative R, or a win into a huge positive one.
+        risk_ps = t.entry_limit - t.stop
         t.gross_pnl, t.charges, t.net_pnl = round(gross, 2), round(charges, 2), round(net, 2)
         t.r_multiple = round((t.exit_price - entry) / risk_ps, 3)
         t.net_r_multiple = round(net / (t.filled_qty * risk_ps), 3)
@@ -488,6 +633,14 @@ class TradingEngine:
                        "moved outside this system? Resolve by hand before trusting the book.")
                 self._alert(rep, asof, msg)
                 self.journal.append("HOLDINGS_MISMATCH", asof=asof, symbol=sym, broker=have, book=want)
+        pending_only = ({t.symbol for t in book.active() if t.status == "PENDING_ENTRY"}
+                        - {t.symbol for t in book.active() if t.status in ("OPEN", "EXITING")})
+        for sym in sorted(pending_only):
+            if held.get(sym, 0) > 0:
+                msg = (f"{sym}: broker holds {held[sym]} shares while the book's entry is still pending "
+                       "— it may have filled unseen. If these are your own shares, ignore this.")
+                self._alert(rep, asof, msg)
+                self.journal.append("HOLDINGS_MISMATCH", asof=asof, symbol=sym, broker=held[sym], book=0)
 
     # ------------------------------------------------------------------
     # entries
@@ -555,6 +708,13 @@ class TradingEngine:
                 rep.rejected.append({"symbol": it.symbol, "reason": f"not confirmed: {how}"})
                 continue
 
+            late_kill = self.kill.engaged()
+            if late_kill:
+                # Engaged while the confirmation prompt was waiting.
+                rep.rejected.append({"symbol": it.symbol, "reason": f"kill switch engaged: {late_kill}"})
+                self.journal.append("DECISION", asof=asof, decision=f"{it.symbol}: confirmed but kill switch engaged")
+                continue
+
             trade_id, tag = book.next_ids(it.symbol, it.signal_bar)
             t = Trade(
                 trade_id=trade_id, symbol=it.symbol, direction="long", status="PENDING_ENTRY",
@@ -573,13 +733,23 @@ class TradingEngine:
             try:
                 oid = self.broker.submit_entry(t, session_open)
             except BrokerError as exc:
-                t.status = "CANCELLED"
-                t.alerts.append(str(exc))
-                self._alert(rep, asof, f"{it.symbol}: entry REJECTED by broker — {exc}")
-                self.journal.append("ORDER_REJECTED", asof=asof, trade_id=trade_id, tag=tag, error=str(exc))
-                self.store.save(book)
-                continue
+                # Never read a failed call as a rejection: a timeout can land
+                # after the broker accepted the order. Ask for the tag; if the
+                # broker cannot say, the trade stays PENDING with no id and the
+                # next reconcile settles it — adopted, dead, or never sent.
+                oid = self._lookup_tag(tag)
+                if oid is None:
+                    t.alerts.append(str(exc))
+                    self._alert(rep, asof, f"{it.symbol}: entry submission failed — {exc}. Outcome "
+                                            f"unknown; tag {tag} is checked on the next pass.")
+                    self.journal.append("ORDER_SUBMIT_FAILED", asof=asof, trade_id=trade_id, tag=tag, error=str(exc))
+                    self.store.save(book)
+                    continue
+                self.journal.append("ORDER_ADOPTED", asof=asof, trade_id=trade_id, tag=tag, order_id=oid,
+                                    after_error=str(exc))
             t.entry_order_id = oid
+            if broker_cash is not None:
+                broker_cash -= it.notional     # the next order sees what this one used
             book.count_order(asof)
             approved += 1
             # An order id means the broker accepted it into its book. It does

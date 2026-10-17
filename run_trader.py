@@ -29,7 +29,7 @@ import json
 import os
 import sys
 import time as _time
-from datetime import date, datetime
+from datetime import date, datetime, time
 
 from market.config import IST, settings
 from market.providers import DataUnavailable, get_provider
@@ -52,7 +52,7 @@ def _cfg(mode: str) -> TradingConfig:
     return TradingConfig(mode=mode)
 
 
-def _engine(cfg: TradingConfig, args) -> TradingEngine:
+def _engine(cfg: TradingConfig, args, reduce_only: bool = False) -> TradingEngine:
     journal = Journal(cfg.journal_path, cfg.mode)
     if cfg.is_live:
         if (args.provider or settings.provider or "").strip().lower() in ("mock", "synthetic"):
@@ -60,6 +60,7 @@ def _engine(cfg: TradingConfig, args) -> TradingEngine:
         auth = authorise_live(
             cfg, journal, backtest_json=args.backtest,
             autonomous=args.autonomous, override_reason=args.override_gates,
+            reduce_only=reduce_only,
         )
         provider = get_provider(args.provider)
         broker = _live_broker(cfg, args.broker)
@@ -144,22 +145,40 @@ def cmd_watch(args) -> int:
               file=sys.stderr)
         return 2
     try:
-        eng = _engine(cfg, args)
+        eng = _engine(cfg, args, reduce_only=True)
     except (LiveRefused, BrokerError, DataUnavailable, FileNotFoundError) as exc:
         print(f"[refused] {exc}", file=sys.stderr)
         return 2
     alerts = False
-    print(f"watching every {args.interval}s while the session is open (Ctrl-C to stop)")
-    while True:
-        now = datetime.now(IST)
-        if not market_status(now)["session_open"]:
-            print("session closed — watch ends")
-            break
+
+    def tick(now) -> None:
+        nonlocal alerts
         rep = eng.watch_once(now)
         if rep.actions or rep.alerts:
             print(rep.text())
             alerts = alerts or bool(rep.alerts)
-        _time.sleep(args.interval)
+
+    print(f"watching every {args.interval}s while the session is open (Ctrl-C to stop)")
+    while True:
+        now = datetime.now(IST)
+        if market_status(now)["session_open"]:
+            tick(now)
+            _time.sleep(args.interval)
+            continue
+        if now.weekday() < 5 and now.time() < time(9, 15):
+            _time.sleep(min(args.interval, 60))        # started early: wait for the open
+            continue
+        # After the close. Kite's order book only lasts the day: an entry that
+        # filled or a DAY order that died is readable today and not tomorrow.
+        # One last pass once the exchange has settled DAY orders books them.
+        if time(15, 30) <= now.time() < time(16, 0):
+            settle = now.replace(hour=15, minute=40, second=0, microsecond=0)
+            if now < settle:
+                print("session closed — one settling pass at 15:40")
+                _time.sleep((settle - now).total_seconds())
+            tick(datetime.now(IST))
+        print("watch ends")
+        break
     return 3 if alerts else 0
 
 
@@ -266,7 +285,7 @@ def cmd_flatten(args) -> int:
             print("Not confirmed. Nothing sent.")
             return 2
     try:
-        eng = _engine(cfg, args)
+        eng = _engine(cfg, args, reduce_only=True)
     except (LiveRefused, BrokerError, DataUnavailable, FileNotFoundError) as exc:
         print(f"[refused] {exc}", file=sys.stderr)
         return 2
