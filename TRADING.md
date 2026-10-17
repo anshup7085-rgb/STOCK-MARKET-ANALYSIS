@@ -280,7 +280,10 @@ one-share position you are willing to lose, and watch every step.
   contract note and set `verified_on`.
 - **Holdings reconciliation is approximate** and only raises alerts; a person
   resolves mismatches.
-- **No notifications.** Exit code 3 signals alerts; hook it to whatever you read.
+- **Alerts depend on Twilio and WhatsApp's rules.** Without an approved WhatsApp
+  template, alerts arrive only within 24 hours of your last message to the
+  number; calls to Indian numbers come from a foreign number and can be flagged.
+  Run `alert-test` after any change.
 - **Corporate actions** are detected from price fingerprints and rejected, not
   adjusted.
 - **No live entries the morning after a long weekend.** Staleness is measured in
@@ -290,6 +293,46 @@ one-share position you are willing to lose, and watch every step.
 - **An order call that fails has an unknown outcome.** The engine asks the
   broker for the order's tag and adopts it if it landed; when the broker cannot
   say, the trade waits up to two minutes for the next reconcile to settle it.
+
+## Alerts — WhatsApp, and a phone call when it is urgent
+
+| What happened | You get |
+|---|---|
+| **Urgent** (live): a position without protection, a stop leg stranded below the market, an exit that may not have gone out, an exit blocked after 3 rejections, the kill switch tripping, shares missing at the broker | A **phone call**. If you don't pick up (no answer, busy, voicemail) → **WhatsApp** with the details |
+| Urgent in **paper** | WhatsApp only — a simulated position cannot lose money (`ALERT_CALLS=always` to ring anyway) |
+| Any other alert | WhatsApp |
+| End of the daily cycle | A one-message summary on WhatsApp (`ALERT_DAILY_SUMMARY=0` to turn off) |
+
+The same alert is sent once per 30 minutes (`ALERT_DEDUP_MINUTES`), so `watch`
+does not ring you every minute while a condition lasts — and an alert that
+failed to deliver is retried on the next tick. A call rings on a background
+thread, so `watch` keeps protecting positions while your phone rings. Alerts
+can never stop trading: every failure is journaled as `ALERT_FAILED`.
+
+**Setup** (Twilio does both WhatsApp and calls from one account):
+
+1. Create a Twilio account and an **API key** (Console → API keys). Keep the
+   key secret out of the repo — put it in the server's environment file with
+   `chmod 600`.
+2. **Calls:** buy a voice-capable Twilio number. Calls to Indian numbers must come
+   from a non-Indian number, and Indian phones may label it spam — **save it in
+   your contacts as "TRADING ALERT"**.
+3. **WhatsApp, for testing:** join the Twilio WhatsApp sandbox from your phone
+   (Console → Messaging → Try WhatsApp) and use its `whatsapp:+1...` number.
+   Sandbox messages only arrive within 24 hours of your last message to it.
+4. **WhatsApp, for real:** register a WhatsApp sender, create a Messaging
+   Service, and get a *utility* template approved with one variable, e.g.
+   `Trading alert: {{1}}`. Set its Content SID below. Without a template,
+   WhatsApp refuses business-initiated messages outside the 24-hour window
+   (Twilio error 63016).
+5. Set the variables (see `.env.example`), then:
+
+```bash
+python run_trader.py alert-test --channel whatsapp
+python run_trader.py alert-test --channel call      # rings you; don't answer to test the fallback
+```
+
+Per-message and per-minute call charges apply — check Twilio's current pricing.
 
 ## State layout
 

@@ -76,6 +76,7 @@ trading/journal.py       hash-chained, append-only audit log
 trading/gates.py         ROADMAP Gates 1-3 evaluated from recorded evidence
 trading/live.py          the live opt-in: ack phrase, gates, confirmation, policy
 trading/replay.py        the whole system walked through history
+trading/alerts.py        WhatsApp alerts; a phone call for urgent ones, WhatsApp if unanswered
 tools/kite_session.py    the daily manual Kite login, made less fiddly
 reports/                 rendered session reports
 ```

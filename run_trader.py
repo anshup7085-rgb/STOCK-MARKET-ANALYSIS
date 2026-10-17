@@ -13,6 +13,7 @@ trading/live.py. Read TRADING.md before using `--mode live`.
     python run_trader.py release --reason "..."
     python run_trader.py flatten --mode paper --reason "..."
     python run_trader.py record-exit --trade-id ID --qty N --price P --note "contract note ..."
+    python run_trader.py alert-test --channel whatsapp|call
 
     # live — see TRADING.md for the daily routine
     python run_trader.py cycle   --mode live --provider kite  --broker kite  [--override-gates "..."]
@@ -35,6 +36,7 @@ from market.config import IST, settings
 from market.providers import DataUnavailable, get_provider
 from market.scan import load_catalysts, market_status
 from market.universe import DEFAULT_UNIVERSE
+from trading.alerts import AlertConfig, build_alerter
 from trading.book import BookStore
 from trading.brokers.base import BrokerError
 from trading.brokers.paper import PaperBroker
@@ -131,6 +133,14 @@ def cmd_init(args) -> int:
     return 0
 
 
+def _alerter(cfg: TradingConfig):
+    """WhatsApp/call alerts if configured; a one-line note if not."""
+    a = build_alerter(cfg.mode, cfg.state_dir, journal=Journal(cfg.journal_path, cfg.mode))
+    if a.client is None:
+        print("[note] alerts not configured — see TRADING.md, Alerts", file=sys.stderr)
+    return a
+
+
 def cmd_cycle(args) -> int:
     cfg = _cfg(args.mode)
     try:
@@ -140,6 +150,9 @@ def cmd_cycle(args) -> int:
         print(f"[refused] {exc}", file=sys.stderr)
         return 2
     print(rep.text())
+    alerts = _alerter(cfg)
+    alerts.notify(rep, "cycle")
+    alerts.wait()            # a ringing call finishes before cron's process exits
     return 3 if rep.alerts else 0
 
 
@@ -155,6 +168,7 @@ def cmd_watch(args) -> int:
         print(f"[refused] {exc}", file=sys.stderr)
         return 2
     alerts = False
+    notifier = _alerter(cfg)
 
     def tick(now) -> None:
         nonlocal alerts
@@ -162,6 +176,7 @@ def cmd_watch(args) -> int:
         if rep.actions or rep.alerts:
             print(rep.text())
             alerts = alerts or bool(rep.alerts)
+        notifier.notify(rep, "watch")     # a call rings on its own thread; watch keeps going
 
     print(f"watching every {args.interval}s while the session is open (Ctrl-C to stop)")
     while True:
@@ -184,6 +199,7 @@ def cmd_watch(args) -> int:
             tick(datetime.now(IST))
         print("watch ends")
         break
+    notifier.wait()
     return 3 if alerts else 0
 
 
@@ -296,7 +312,33 @@ def cmd_flatten(args) -> int:
         return 2
     rep = eng.flatten(args.reason)
     print(rep.text())
+    notifier = _alerter(cfg)
+    notifier.notify(rep, "flatten")
+    notifier.wait()
     return 3 if rep.alerts else 0
+
+
+def cmd_alert_test(args) -> int:
+    """Send a test WhatsApp, or ring the phone, so you know alerts reach you."""
+    cfg = _cfg(args.mode)
+    acfg = AlertConfig.from_env()
+    if acfg.missing():
+        print("[refused] alerts need: " + ", ".join(acfg.missing()), file=sys.stderr)
+        if not (args.channel == "whatsapp" and acfg.whatsapp_ready):
+            return 2
+    a = build_alerter(cfg.mode, cfg.state_dir, journal=Journal(cfg.journal_path, cfg.mode))
+    a.background = False
+    from trading.engine import CycleReport
+    rep = CycleReport(mode=cfg.mode, started=datetime.now(IST).isoformat(timespec="seconds"))
+    msg = f"TEST alert from the trading system at {rep.started} — nothing is wrong."
+    if args.channel == "whatsapp":
+        ok = a._whatsapp(msg, "test")
+        print("WhatsApp sent." if ok else "WhatsApp FAILED — check the journal (ALERT_FAILED) for Twilio's reason.")
+        return 0 if ok else 2
+    a.cfg.calls = "always"
+    outcome = a._escalate_inner([msg])
+    print(f"Call outcome: {outcome}" + ("" if outcome == "answered" else " — WhatsApp fallback attempted"))
+    return 0
 
 
 def cmd_replay(args) -> int:
@@ -407,6 +449,11 @@ def main() -> int:
     p = sub.add_parser("release")
     p.add_argument("--reason", required=True)
     p.set_defaults(fn=cmd_release)
+
+    p = sub.add_parser("alert-test", help="send a test WhatsApp, or ring your phone")
+    p.add_argument("--channel", default="whatsapp", choices=("whatsapp", "call"))
+    p.add_argument("--mode", default="paper", choices=("paper", "live"))
+    p.set_defaults(fn=cmd_alert_test)
 
     p = sub.add_parser("replay")
     p.add_argument("--provider", default=None)

@@ -38,6 +38,8 @@ def main() -> int:
     ap.add_argument("--step", type=int, default=5, help="bars between rebalances")
     ap.add_argument("--warmup", type=int, default=200, help="bars before first trade")
     ap.add_argument("--lookback", type=int, default=800, help="bars to fetch")
+    ap.add_argument("--window", type=int, default=300,
+                    help="bars each snapshot sees (300 = what the live scanner fetches; 0 = all)")
     ap.add_argument("--json", dest="json_out", default=None)
     args = ap.parse_args()
 
@@ -76,6 +78,7 @@ def main() -> int:
         horizon=args.horizon,
         step=args.step,
         warmup=args.warmup,
+        window=args.window or None,
         direction=args.direction,
     )
     if benchmark is None:
@@ -95,6 +98,8 @@ def main() -> int:
         payload = {
             "provider": provider.name,
             "horizon": res.horizon,
+            "window": args.window or None,
+            "lookback": args.lookback,
             "direction": res.direction,
             "n_trades": res.n,
             "expectancy_r": res.expectancy_r,

@@ -11,8 +11,8 @@ evidence is required before it touches money.
 | Score discrimination | Fixed — R:R 1 → 43 distinct values; regime moved to a scan-level deduction |
 | Backtest harness | Built — 752-trade control on random walks returns Spearman +0.021, correctly finding nothing |
 | Honest failure | Verified — dead feed gives regime unknown, zero candidates, NO TRADE |
-| Market data | **Blocked** — 403 at the egress gateway for every financial host |
-| Does the score predict? | **Unknown** — the harness is ready and now reports R net of costs; the answer may be no |
+| Market data | **Unblocked** 2026-10-17 — Yahoo allowlisted; 10 years of EOD NSE history |
+| Does the score predict? | **No.** Gate 1 failed on real data, 2026-10-17: Spearman −0.015 over 10,399 non-overlapping trades, net expectancy +0.008R with a 95% CI spanning zero. Kill criterion 1 applies — the score is retired as a ranking tool. See `reports/2026-10-17-gate1.md` |
 | Sector / breadth | Not built |
 | Tradability gates | Partial — corporate-action detection and a restricted list built; holiday calendar built, holding the rest of 2026 from secondary sources and **unverified** until checked against the NSE circular; F&O ban is not a cash-segment restriction |
 | Portfolio correlation | Built — pre-trade, in the risk engine |
@@ -126,7 +126,8 @@ Each step waits on the one before it. Every step ends at a gate that can say
 | # | Step | Who | Done when | Stop if |
 |---|---|---|---|---|
 | 0 | Merge PR #1; allowlist the three Yahoo hosts above in this environment | **You** | Feed reachable | — |
-| 1 | **Gate 1** — run `run_backtest.py` on real NSE history and publish the number, whatever it is | Claude (once the feed is open), or you on your own machine | `run_trader.py gates --backtest F` passes Gate 1 | No relationship between score and outcome, or negative after costs — redesign the score before anything else |
+| 1 | **Gate 1** — run `run_backtest.py` on real NSE history and publish the number, whatever it is | Claude (once the feed is open), or you on your own machine | `run_trader.py gates --backtest F` passes Gate 1 | No relationship between score and outcome, or negative after costs — redesign the score before anything else. **Ran 2026-10-17: FAILED — stop applies. Next is a pre-registered new strategy, step 1a.** |
+| 1a | New strategy, pre-registered: hypothesis, rules, data split and pass criteria written and committed **before** the hold-out is touched; developed on 2017–2022, judged once on 2023–2026 | Claude, you approve the hypothesis | Passes Gate 1 on the hold-out | Fails the hold-out — that hypothesis is dead; do not re-test on the same hold-out |
 | 2 | Replay the whole system on the same history, both fee cards | Claude | Trades per month, net expectancy, worst drawdown known | Replay loses money after costs |
 | 3 | Small cloud server with a static IP; cron `cycle --mode paper` daily at 16:20 | **You** set it up; Claude writes the setup script | First real-time paper trade journaled | — |
 | 4 | **Gate 2** — 60 paper trades on a real feed, positive net expectancy; holiday calendar verified | Time | `gates` passes Gate 2 | Paper expectancy ≤ 0 |

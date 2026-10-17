@@ -227,9 +227,16 @@ def run_backtest(
     direction: str = "long",
     segment: str = "delivery",
     slippage_pct: float = 0.05,
+    window: int | None = 300,
 ) -> BacktestResult:
     """
     Walk every symbol forward, scoring only on history and settling on the path.
+
+    `window` is how many bars each snapshot sees, ending at bar i. It defaults
+    to 300 because that is what the live scanner fetches: swing structure is
+    read from the whole slice it is given, so a backtest that hands it ten years
+    would measure targets placed at 2017 highs the live system never sees.
+    None means all history to date (the old behaviour).
 
     `step` spaces out rebalance bars. Sampling every bar would produce heavily
     overlapping trades whose outcomes share the same price action, which inflates
@@ -244,7 +251,8 @@ def run_backtest(
             continue
 
         for i in range(warmup, len(df) - horizon, step):
-            hist = df.iloc[: i + 1]                      # causal slice
+            lo = 0 if window is None else max(0, i + 1 - window)
+            hist = df.iloc[lo: i + 1]                    # causal slice, live-sized
             try:
                 snap = build_snapshot(hist, sym)
             except ValueError:
@@ -260,11 +268,12 @@ def run_backtest(
             regime = "unknown"
             rs = None
             if bench_close is not None:
-                bhist = bench_close.loc[: hist.index[-1]]
+                bslice = benchmark.loc[: hist.index[-1]]
+                if window is not None:
+                    bslice = bslice.tail(window)
+                bhist = bslice["close"]
                 if len(bhist) >= 60:
-                    regime = classify_regime(
-                        benchmark.loc[: hist.index[-1]]
-                    ).regime
+                    regime = classify_regime(bslice).regime
                     rs = relative_strength(hist["close"], bhist, 60)
 
             score = build_score(

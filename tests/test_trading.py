@@ -676,6 +676,129 @@ def test_reduce_only_live_authorisation_skips_the_gates_but_not_the_ack():
     assert auth.gates == [] and not auth.overridden
 
 
+# -- alerts: WhatsApp, and a call for urgent ones ---------------------------
+
+class FakeTwilio:
+    """Records requests; call status follows a script, e.g. ["ringing", "no-answer"]."""
+
+    def __init__(self, call_script=("ringing", "no-answer"), answered_by="", fail_whatsapp=False):
+        self.reqs: list[tuple[str, str, dict | None]] = []
+        self.script = list(call_script)
+        self.answered_by = answered_by
+        self.fail_whatsapp = fail_whatsapp
+
+    def request(self, method, url, data=None):
+        from trading.alerts import AlertError
+        self.reqs.append((method, url, data))
+        if url.endswith("/Messages.json"):
+            if self.fail_whatsapp:
+                raise AlertError("Twilio 400 — 63016: outside the 24h window")
+            return {"sid": "SM1"}
+        if url.endswith("/Calls.json"):
+            return {"sid": "CA1"}
+        status = self.script.pop(0) if len(self.script) > 1 else self.script[0]
+        return {"status": status, "answered_by": self.answered_by}
+
+    def sent(self, kind):
+        return [d for m, u, d in self.reqs if m == "POST" and u.endswith(kind)]
+
+
+def _alerter(fake, mode="live", **cfg_kw):
+    from trading.alerts import AlertConfig, Alerter, TwilioClient
+    base = dict(to="+919800000000", account_sid="AC1", auth_user="SK1", auth_secret="x",
+                whatsapp_from="whatsapp:+14155238886", messaging_service_sid=None, content_sid=None,
+                voice_from="+15550001111")
+    base.update(cfg_kw)
+    cfg = AlertConfig(**base)
+    return Alerter(cfg, mode, tmpdir() / "alerts.json", client=TwilioClient(cfg, transport=fake),
+                   sleep=lambda s: None, background=False)
+
+
+def _rep(alerts=(), urgent=()):
+    r = CycleReport(mode="live", started="2026-10-17T09:30:00")
+    r.alerts, r.urgent = list(alerts) + list(urgent), list(urgent)
+    return r
+
+
+def test_urgent_live_alert_calls_and_falls_back_to_whatsapp_when_unanswered():
+    fake = FakeTwilio(("ringing", "no-answer"))
+    a = _alerter(fake)
+    a.notify(_rep(urgent=["TCS: UNPROTECTED — stop leg rests at 950.4 with LTP 940"]), "watch")
+    calls, msgs = fake.sent("/Calls.json"), fake.sent("/Messages.json")
+    assert len(calls) == 1 and calls[0]["To"] == "+919800000000" and calls[0]["MachineDetection"] == "Enable"
+    assert "UNPROTECTED" in calls[0]["Twiml"] and calls[0]["Twiml"].startswith("<Response>")
+    assert len(msgs) == 1 and "URGENT" in msgs[0]["Body"] and "call no-answer" in msgs[0]["Body"]
+    assert msgs[0]["To"] == "whatsapp:+919800000000"
+
+
+def test_answered_call_needs_no_whatsapp_but_voicemail_does():
+    fake = FakeTwilio(("ringing", "in-progress", "completed"), answered_by="human")
+    _alerter(fake).notify(_rep(urgent=["KILL SWITCH ENGAGED: daily loss"]), "watch")
+    assert len(fake.sent("/Calls.json")) == 1 and not fake.sent("/Messages.json")
+    fake = FakeTwilio(("ringing", "completed"), answered_by="machine_end_beep")
+    _alerter(fake).notify(_rep(urgent=["KILL SWITCH ENGAGED: daily loss"]), "watch")
+    assert len(fake.sent("/Messages.json")) == 1, "voicemail is not a person — WhatsApp too"
+
+
+def test_warnings_are_whatsapp_only_and_paper_urgents_do_not_ring():
+    fake = FakeTwilio()
+    _alerter(fake).notify(_rep(alerts=["INFY: protective order gone — re-placing it"]), "watch")
+    assert not fake.sent("/Calls.json") and len(fake.sent("/Messages.json")) == 1
+    fake = FakeTwilio()
+    _alerter(fake, mode="paper").notify(_rep(urgent=["TCS: UNPROTECTED (simulated)"]), "watch")
+    assert not fake.sent("/Calls.json"), "a simulated position must not ring the phone"
+    assert len(fake.sent("/Messages.json")) == 1
+
+
+def test_same_alert_rings_once_per_window_but_retries_after_a_failed_delivery():
+    fake = FakeTwilio(("ringing", "completed"), answered_by="human")
+    a = _alerter(fake)
+    for _ in range(3):                                   # watch ticks a minute apart
+        a.notify(_rep(urgent=["TCS: EXIT BLOCKED"]), "watch")
+    assert len(fake.sent("/Calls.json")) == 1
+    fake = FakeTwilio(fail_whatsapp=True)
+    a = _alerter(fake)
+    a.notify(_rep(alerts=["INFY: broker error"]), "watch")
+    fake.fail_whatsapp = False
+    a.notify(_rep(alerts=["INFY: broker error"]), "watch")
+    assert len(fake.sent("/Messages.json")) == 2, "an undelivered alert must be retried"
+
+
+def test_template_mode_sends_content_sid_not_free_text():
+    fake = FakeTwilio()
+    _alerter(fake, content_sid="HX123", messaging_service_sid="MG1").notify(_rep(alerts=["warn <&>"]), "watch")
+    (m,) = fake.sent("/Messages.json")
+    assert m["ContentSid"] == "HX123" and m["MessagingServiceSid"] == "MG1" and "Body" not in m
+    assert "warn <&>" in json.loads(m["ContentVariables"])["1"]
+
+
+def test_alert_failures_never_raise_and_twiml_is_escaped():
+    class Broken(FakeTwilio):
+        def request(self, method, url, data=None):
+            self.reqs.append((method, url, data))
+            if url.endswith("/Calls.json"):
+                return {"sid": "CA1"}
+            raise ConnectionError("network down")
+    fake = Broken()
+    _alerter(fake).notify(_rep(urgent=["A & B <x>"], alerts=["w"]), "cycle")   # must not raise
+    (call,) = fake.sent("/Calls.json")
+    assert "A &amp; B &lt;x&gt;" in call["Twiml"]
+
+
+def test_engine_marks_money_at_risk_alerts_urgent():
+    fake = FakeKite()
+    eng = _live_engine(fake)
+    book, rep = eng.store.load(), CycleReport(mode="paper", started="x")
+    t = _open_trade(trade_id="u1", protection_id="77")
+    book.trades = {"u1": t}
+    fake.book.append({"order_id": "555", "status": "OPEN", "filled_quantity": 0, "variety": "regular"})
+    fake.gtts[77] = {"status": "triggered", "orders": [
+        {"result": {"order_result": {"order_id": "555", "status": "success"}}}, {"result": None}]}
+    fake.px = 940.0
+    eng._reconcile(book, {}, "2026-08-03", True, rep, manage_time=False)
+    assert rep.urgent and all("UNPROTECTED" in u for u in rep.urgent)
+
+
 # -- Groww adapter, against a fake client -----------------------------------
 
 class FakeGroww:
@@ -1030,7 +1153,8 @@ def test_gate2_counts_only_untampered_real_time_paper_trades():
 def test_gate1_wants_the_traded_strategy_and_independent_trades():
     from trading.gates import gate1_backtest
     root = tmpdir()
-    trades = [{"symbol": f"S{i % 10}", "entry_date": str(np.datetime64("2020-01-01") + 7 * (i // 10)),
+    trades = [{"symbol": f"S{i % 10}",
+               "entry_date": str(np.datetime64("2020-01-01") + np.timedelta64(7 * (i // 10), "D")),
                "bars_held": 20} for i in range(400)]
     res = {"provider": "yfinance", "direction": "long", "horizon": 20, "n_trades": 400,
            "spearman": 0.3, "expectancy_net_r": 0.2, "trades": trades,
@@ -1069,7 +1193,8 @@ def test_nan_correlation_is_unmeasurable_not_safe():
     book.trades["x"] = make_trade(df, symbol="INFY", status="OPEN", filled_qty=10, entry_price=100.0)
     flat = pd.Series([0.0] * 80)                      # a held name that never moved
     other = pd.Series(np.random.default_rng(3).normal(0, 0.01, 80))
-    d = eng.check_entry(intent(), book, ctx(returns={"TCS": other, "INFY": flat}))
+    with np.errstate(invalid="ignore", divide="ignore"):    # a flat series has no variance
+        d = eng.check_entry(intent(), book, ctx(returns={"TCS": other, "INFY": flat}))
     assert "correlation" in [f.name for f in d.failures], d.summary()
 
 

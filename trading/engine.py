@@ -62,6 +62,7 @@ class CycleReport:
     asof: str | None = None
     actions: list[str] = field(default_factory=list)
     alerts: list[str] = field(default_factory=list)
+    urgent: list[str] = field(default_factory=list)   # the subset that puts money at risk
     submitted: list[str] = field(default_factory=list)
     rejected: list[dict] = field(default_factory=list)
     equity: float | None = None
@@ -75,7 +76,7 @@ class CycleReport:
         if self.kill:
             out.append(f"KILL SWITCH: {self.kill}")
         out += [f"  - {a}" for a in self.actions]
-        out += [f"  ! {a}" for a in self.alerts]
+        out += [f"  !! {a}" if a in self.urgent else f"  ! {a}" for a in self.alerts]
         for r in self.rejected:
             out.append(f"  x {r['symbol']}: {r['reason']}")
         out.append(f"decision: {self.decision}")
@@ -177,7 +178,7 @@ class TradingEngine:
         # 4. breakers ----------------------------------------------------
         for why in self.risk.circuit_breakers(book, asof):
             p = self.kill.engage(why)
-            self._alert(rep, asof, f"KILL SWITCH ENGAGED ({p}): {why}")
+            self._alert(rep, asof, f"KILL SWITCH ENGAGED ({p}): {why}", urgent=True)
             self.journal.append("KILL_SWITCH_ENGAGED", asof=asof, reason=why, path=str(p))
         rep.kill = self.kill.engaged()
         if rep.kill:
@@ -398,7 +399,8 @@ class TradingEngine:
             if p.filled_qty:
                 self._book_exit(t, book, p.filled_qty, p.fill_price, p.at or asof, "stop", rep)
             if t.remaining_qty > 0:
-                self._alert(rep, asof, f"{t.symbol}: UNPROTECTED — {p.message}. Sending an emergency exit.")
+                self._alert(rep, asof, f"{t.symbol}: UNPROTECTED — {p.message}. Sending an emergency exit.",
+                            urgent=True)
                 self.journal.append("PROTECTION_FAILED", asof=asof, trade_id=t.trade_id, message=p.message)
                 t.protection_id, t.protect_attempts = None, t.protect_attempts + 1
                 self._exit(t, book, asof, session_open, rep, "emergency")
@@ -445,10 +447,11 @@ class TradingEngine:
             return
         if not p.order_id:
             self._alert(rep, asof, f"{t.symbol}: UNPROTECTED — {p.leg} leg rests at {leg_px} with LTP "
-                                    f"{ltp}, and its order id is unknown. Cancel it and exit by hand.")
+                                    f"{ltp}, and its order id is unknown. Cancel it and exit by hand.",
+                        urgent=True)
             return
         self._alert(rep, asof, f"{t.symbol}: UNPROTECTED — {p.leg} leg rests at {leg_px} with LTP {ltp}; "
-                                "cancelling it so an emergency exit can go out")
+                                "cancelling it so an emergency exit can go out", urgent=True)
         self.journal.append("PROTECTION_STRANDED", asof=asof, trade_id=t.trade_id, leg=p.leg,
                             order_id=p.order_id, leg_price=leg_px, ltp=ltp)
         self.broker.cancel_order(p.order_id)
@@ -459,11 +462,11 @@ class TradingEngine:
         except ProtectionImpossible as exc:
             self.journal.append("PROTECTION_IMPOSSIBLE", asof=asof, trade_id=t.trade_id,
                                 side=exc.side, price=exc.price, message=str(exc))
-            self._alert(rep, asof, f"{t.symbol}: cannot place stop/target — {exc}. Exiting.")
+            self._alert(rep, asof, f"{t.symbol}: cannot place stop/target — {exc}. Exiting.", urgent=True)
             self._exit(t, book, asof, session_open, rep, exc.side, ref_price=exc.price)
             return
         except BrokerError as exc:
-            self._alert(rep, asof, f"{t.symbol}: POSITION OPEN WITHOUT PROTECTION — {exc}")
+            self._alert(rep, asof, f"{t.symbol}: POSITION OPEN WITHOUT PROTECTION — {exc}", urgent=True)
             self.journal.append("PROTECTION_FAILED", asof=asof, trade_id=t.trade_id, message=str(exc))
             return
         t.protection_id = pid
@@ -510,7 +513,7 @@ class TradingEngine:
                 t.exit_rejections[asof] = t.exit_rejections.get(asof, 0) + 1
                 if t.exit_rejections[asof] >= MAX_EXIT_REJECTIONS_PER_DAY:
                     self._alert(rep, asof, f"{t.symbol}: EXIT BLOCKED — rejected {t.exit_rejections[asof]} "
-                                            f"times today ({u.message}). Act by hand.")
+                                            f"times today ({u.message}). Act by hand.", urgent=True)
                     return
             self._alert(rep, asof, f"{t.symbol}: exit order {u.state.lower()} ({u.message}) — retrying")
             self._exit(t, book, asof, session_open, rep, t.exit_reason_pending or "exit")
@@ -552,7 +555,7 @@ class TradingEngine:
                 # no id; the next reconcile asks for the tag, and only once it is
                 # sure the order never landed does it re-protect or re-exit.
                 self._alert(rep, asof, f"{t.symbol}: exit submission failed — {exc}. Outcome unknown; "
-                                        f"tag {tag} is checked on the next pass.")
+                                        f"tag {tag} is checked on the next pass.", urgent=True)
                 self.journal.append("ORDER_SUBMIT_FAILED", asof=asof, trade_id=t.trade_id, tag=tag, error=str(exc))
                 t.exit_order_id, t.status, t.exit_reason_pending, t.exit_limit = None, "EXITING", reason, limit
                 return
@@ -632,7 +635,7 @@ class TradingEngine:
             if have < want:
                 msg = (f"{sym}: broker shows {have} shares, the book expects {want}. Sold or "
                        "moved outside this system? Resolve by hand before trusting the book.")
-                self._alert(rep, asof, msg)
+                self._alert(rep, asof, msg, urgent=True)
                 self.journal.append("HOLDINGS_MISMATCH", asof=asof, symbol=sym, broker=have, book=want)
         pending_only = ({t.symbol for t in book.active() if t.status == "PENDING_ENTRY"}
                         - {t.symbol for t in book.active() if t.status in ("OPEN", "EXITING")})
@@ -774,6 +777,13 @@ class TradingEngine:
         dates = [bar_date(df.index[-1]) for df in bars.values() if df is not None and not df.empty]
         return max(dates).isoformat() if dates else None
 
-    def _alert(self, rep: CycleReport, asof: str | None, msg: str) -> None:
+    def _alert(self, rep: CycleReport, asof: str | None, msg: str, urgent: bool = False) -> None:
+        """
+        `urgent` means money is at risk right now and a person must look — an
+        unprotected position, an exit that may not have gone out, a tripped
+        breaker. trading/alerts.py rings the phone for these.
+        """
         rep.alerts.append(msg)
-        self.journal.append("ALERT", asof=asof, message=msg)
+        if urgent:
+            rep.urgent.append(msg)
+        self.journal.append("ALERT", asof=asof, message=msg, urgent=urgent)
