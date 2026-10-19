@@ -184,14 +184,9 @@ def test_load_back_adjusts_an_exact_bonus_factor_only():
     close = np.where(days >= days[20], 200.0, 300.0)          # 2/3 overnight: a 1:2 bonus left unadjusted
     df = pd.DataFrame({"open": close, "high": close, "low": close, "close": close, "volume": 1000.0},
                       index=pd.Index(days, name="date"))
-    old = data.CACHE
     with tempfile.TemporaryDirectory() as tmp:
-        data.CACHE = Path(tmp)
-        try:
-            df.to_csv(data.CACHE / "TEST.csv")
-            adj = data.load("TEST")
-        finally:
-            data.CACHE = old
+        df.to_csv(Path(tmp) / "TEST.csv")
+        adj = data.load("TEST", cache=Path(tmp))
     assert np.allclose(adj["close"].iloc[:20], 200.0) and np.allclose(adj["close"].iloc[20:], 200.0)
     assert np.allclose(adj["volume"].iloc[:20], 1500.0) and np.allclose(adj["volume"].iloc[20:], 1000.0)
     crash = df.copy()

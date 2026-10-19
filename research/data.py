@@ -21,12 +21,13 @@ def _name(symbol: str) -> str:
     return symbol.replace("^", "IDX_").replace("&", "_AND_") + ".csv"
 
 
-def fetch(symbols: list[str], lookback: int, provider_name: str = "yfinance") -> dict[str, str]:
+def fetch(symbols: list[str], lookback: int, provider_name: str = "yfinance",
+          cache: Path = CACHE) -> dict[str, str]:
     """Download through the project's provider and write one CSV per symbol."""
     from market.providers import DataUnavailable, get_provider
 
     prov = get_provider(provider_name)
-    CACHE.mkdir(parents=True, exist_ok=True)
+    cache.mkdir(parents=True, exist_ok=True)
     errors = {}
     for s in symbols:
         try:
@@ -37,7 +38,7 @@ def fetch(symbols: list[str], lookback: int, provider_name: str = "yfinance") ->
         out = df.copy()
         out.index = pd.DatetimeIndex(out.index).tz_localize(None) if getattr(out.index, "tz", None) else out.index
         out.index.name = "date"
-        out.to_csv(CACHE / _name(s))
+        out.to_csv(cache / _name(s))
     return errors
 
 
@@ -58,14 +59,14 @@ def corporate_action_fixes(df: pd.DataFrame) -> list[tuple[str, float, str]]:
     return out
 
 
-def load(symbol: str, adjust: bool = True) -> pd.DataFrame:
+def load(symbol: str, adjust: bool = True, cache: Path = CACHE) -> pd.DataFrame:
     """
     The cached bars, with any unadjusted split/bonus back-adjusted by its exact
     standard factor (prices x factor, volume / factor, before the event date).
     This rule was fixed before any strategy result was computed; the results
     report lists every adjustment it made.
     """
-    df = pd.read_csv(CACHE / _name(symbol), index_col="date", parse_dates=["date"]).sort_index()
+    df = pd.read_csv(cache / _name(symbol), index_col="date", parse_dates=["date"]).sort_index()
     df = df.astype(float)
     if adjust:
         for day, factor, _ in corporate_action_fixes(df):
@@ -87,12 +88,12 @@ def placeholder_rows(df: pd.DataFrame) -> pd.DatetimeIndex:
     return df.index[(df["volume"] == 0) & flat & (df["close"] == prev)]
 
 
-def available() -> list[str]:
-    return sorted(p.name for p in CACHE.glob("*.csv"))
+def available(cache: Path = CACHE) -> list[str]:
+    return sorted(p.name for p in cache.glob("*.csv"))
 
 
-def manifest() -> dict[str, str]:
-    return {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(CACHE.glob("*.csv"))}
+def manifest(cache: Path = CACHE) -> dict[str, str]:
+    return {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(cache.glob("*.csv"))}
 
 
 MANIFEST = Path(__file__).resolve().parent / "MANIFEST.sha256"
