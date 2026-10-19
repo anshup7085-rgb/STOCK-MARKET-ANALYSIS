@@ -179,9 +179,9 @@ before you pay or trade — these rules changed in 2025–26 and may change agai
 
 | Item | Why | Notes |
 |---|---|---|
-| Zerodha account + Kite Connect app | Order API and, on the paid plan, market data | Third-party write-ups put the Connect plan at Rs500/month and describe a free Personal plan with orders but no market data. Confirm on the Kite developer console. |
+| Zerodha account + Kite Connect app | Order API and, on the paid plan, market data | Zerodha's support pages (checked 2026-10-19): the **Personal** plan is free and covers orders and account APIs but no live or historical data; the **Connect** plan is Rs500/month per API key with live data and historical candles. From October 2026 Zerodha credits the Rs500 in months where you pay at least Rs2,000 of brokerage. Orders alone work on the free plan with `--provider yfinance`; the live price check needs the paid plan or Groww data. |
 | **Static IP**, whitelisted on the app | Zerodha accepts API **orders** only from a registered static IP from 1 April 2026; read-only calls work from anywhere | Up to two IPs (primary + secondary). Simplest: a small VPS with a static IP, which is also where cron runs. IPs may only be shared within immediate family. |
-| Demat debit authorisation (DDPI) | Automated **sell** orders of delivery holdings — every stop and target here — need it | Without it, sells wait for a per-sell CDSL authorisation and GTT legs can fail. Confirm the current requirement with Zerodha. |
+| Demat debit authorisation (DDPI) | Automated **sell** orders of delivery holdings — every stop and target here — need it | Without it, sells wait for a per-sell CDSL authorisation and GTT legs can fail. Zerodha charges Rs100 + GST (Rs118) once to activate it (support page, checked 2026-10-19). |
 | A daily manual login | Access tokens expire each morning; SEBI's framework expects a human 2FA login each trading day | `python tools/kite_session.py` — you log in on Zerodha's page; it prints the export line. It never stores your secret or a TOTP seed. |
 | Algo ID, if required | The exchange framework tags algo orders | Ask Zerodha whether a self-built strategy at this order rate needs one. If they issue one, `export KITE_ALGO_ID=...` and every order carries it. |
 
@@ -189,7 +189,7 @@ before you pay or trade — these rules changed in 2025–26 and may change agai
 
 | Item | Notes |
 |---|---|
-| Groww trading-API subscription | Check current pricing and entitlements on Groww's developer console. |
+| Groww trading-API subscription | groww.in/trade-api (checked 2026-10-19): a free trial with orders but no data; Rs499 + GST a month (shown as an early-bird price against Rs2,000), or Rs4,999 + GST a year. |
 | Static IP | SEBI's framework expects API orders from a registered static IP — check how Groww registers yours. |
 | DDPI | Same reason as Zerodha: automated sells of delivery holdings. |
 | Daily token | Mint `GROWW_ACCESS_TOKEN` yourself (SETUP.md §3b). Never store the TOTP seed — the adapter refuses to start if it sees one. |

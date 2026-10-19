@@ -56,12 +56,18 @@ class ChargeSchedule:
     dp_charge_per_sell: float          # flat, delivery sells only, GST-inclusive
     verified_on: str | None = None     # set this once YOU have checked it
     brokerage_min: float = 0.0         # rupee floor per order, applied after the cap
+    brokerage_min_pct: float | None = None   # the floor is min(brokerage_min, this % of turnover)
 
     def unverified(self) -> bool:
         return self.verified_on is None
 
 
 # Discount-broker style defaults. Verify before trusting a rupee figure.
+# Checked against published rate cards on 2026-10-19, not yet against a contract
+# note: STT, stamp duty, SEBI fee and GST unchanged; the NSE transaction charge
+# is 0.00307% per leg from 2026-03-01 (NSE circular FA73061, 2026-02-27; it was
+# 0.00297% plus a Rs10/crore IPFT levy from 2024-10-01); Zerodha delivery
+# brokerage Rs0 and DP Rs15.34 per scrip per sell day.
 DELIVERY = ChargeSchedule(
     name="discount broker — equity delivery (CNC)",
     segment="delivery",
@@ -69,7 +75,7 @@ DELIVERY = ChargeSchedule(
     brokerage_cap=None,
     stt_buy_pct=0.1,
     stt_sell_pct=0.1,
-    exchange_txn_pct=0.00297,
+    exchange_txn_pct=0.00307,
     sebi_pct=0.0001,
     stamp_duty_buy_pct=0.015,
     gst_pct=18.0,
@@ -83,7 +89,7 @@ INTRADAY = ChargeSchedule(
     brokerage_cap=20.0,
     stt_buy_pct=0.0,
     stt_sell_pct=0.025,
-    exchange_txn_pct=0.00297,
+    exchange_txn_pct=0.00307,
     sebi_pct=0.0001,
     stamp_duty_buy_pct=0.003,
     gst_pct=18.0,
@@ -91,18 +97,21 @@ INTRADAY = ChargeSchedule(
 )
 
 # Groww charges brokerage on delivery too: the lower of Rs20 or 0.1% per
-# executed order, with a Rs5 floor, and a DP charge of about Rs20 + GST per
-# sell. Taken from Groww's help pages and fee-change write-ups in Oct 2026 —
-# unverified like the rest; check a Groww contract note and set verified_on.
+# executed order, with a floor of the lower of Rs5 or 2.5% of the order
+# (groww.in help pages, checked 2026-10-19). The DP charge is Rs20 + GST =
+# Rs23.60 per sell on groww.in/pricing, but Groww's own calculator shows
+# Rs18.25 + GST; the higher figure is kept. Check a Groww contract note and set
+# verified_on.
 GROWW_DELIVERY = ChargeSchedule(
     name="Groww — equity delivery (CNC)",
     segment="delivery",
     brokerage_pct=0.1,
     brokerage_cap=20.0,
     brokerage_min=5.0,
+    brokerage_min_pct=2.5,
     stt_buy_pct=0.1,
     stt_sell_pct=0.1,
-    exchange_txn_pct=0.00297,
+    exchange_txn_pct=0.00307,
     sebi_pct=0.0001,
     stamp_duty_buy_pct=0.015,
     gst_pct=18.0,
@@ -148,7 +157,10 @@ def _leg_brokerage(turnover: float, sched: ChargeSchedule) -> float:
     if sched.brokerage_cap is not None:
         b = min(b, sched.brokerage_cap)
     if turnover > 0 and sched.brokerage_min:
-        b = max(b, sched.brokerage_min)
+        floor = sched.brokerage_min
+        if sched.brokerage_min_pct is not None:
+            floor = min(floor, turnover * sched.brokerage_min_pct / 100.0)
+        b = max(b, floor)
     return b
 
 

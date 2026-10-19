@@ -1243,6 +1243,8 @@ def test_groww_fee_card_has_delivery_brokerage_floor_and_cap():
     small = round_trip_costs(100.0, 100.0, 10, GROWW_DELIVERY)       # Rs1,000 a leg: 0.1% = Rs1 -> floor Rs5
     big = round_trip_costs(1000.0, 1000.0, 100, GROWW_DELIVERY)      # Rs1,00,000 a leg: 0.1% = Rs100 -> cap Rs20
     assert abs(small.brokerage - 10.0) < 1e-9 and abs(big.brokerage - 40.0) < 1e-9
+    tiny = round_trip_costs(10.0, 10.0, 10, GROWW_DELIVERY)          # Rs100 a leg: floor is 2.5% = Rs2.50, not Rs5
+    assert abs(tiny.brokerage - 5.0) < 1e-9
     assert round_trip_costs(1000.0, 1000.0, 100, DELIVERY).brokerage == 0.0, "Zerodha card unchanged"
     assert GROWW_DELIVERY.unverified()
 
