@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
+import sys
 import tempfile
 from datetime import date, datetime, time
 from pathlib import Path
@@ -1307,6 +1309,35 @@ def test_replay_reports_when_the_kill_switch_froze_it():
     h = halt_summary(reps)
     assert h["first_session"] == str(dates[-10]) and "test breaker" in h["reason"]
     assert h["sessions_halted"] == 10 and h["sessions_total"] == 20
+
+
+REPO = Path(__file__).resolve().parent.parent
+
+
+def _cli(*args, **env):
+    full = {**os.environ, "PYTHONPATH": str(REPO), **env}
+    return subprocess.run([sys.executable, str(REPO / "run_trader.py"), *args],
+                          capture_output=True, text=True, env=full, cwd=REPO, timeout=300)
+
+
+def test_replay_command_prints_the_halt():
+    # The CLI wiring, not just halt_summary: a breaker that trips on day one
+    # must show up in the printed summary and the warning line.
+    root = tmpdir()
+    out = _cli("replay", "--provider", "mock", "--equity", "500000", "--symbols", *SYMS[:6],
+               "--start", "2026-06-01", TRADING_STATE_DIR=str(root), DAILY_LOSS_LIMIT_PCT="0.05")
+    assert out.returncode == 0, out.stderr
+    summary, _ = json.JSONDecoder().raw_decode(out.stdout[out.stdout.index("{"):])
+    h = summary["kill_switch"]
+    assert h and h["sessions_halted"] > 0 and h["sessions_total"] == summary["sessions_replayed"]
+    assert f"KILL SWITCH stood from {h['first_session']}" in out.stdout
+
+
+def test_notify_refuses_quietly_without_alerts():
+    root = tmpdir()
+    env = {k: "" for k in os.environ if k.startswith(("TWILIO_", "ALERT_"))}
+    out = _cli("notify", "--message", "test", TRADING_STATE_DIR=str(root), **env)
+    assert out.returncode == 2 and "not configured" in out.stderr
 
 
 def test_engine_rerun_on_the_same_bar_enters_nothing_new():

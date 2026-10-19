@@ -14,6 +14,7 @@ trading/live.py. Read TRADING.md before using `--mode live`.
     python run_trader.py flatten --mode paper --reason "..."
     python run_trader.py record-exit --trade-id ID --qty N --price P --note "contract note ..."
     python run_trader.py alert-test --channel whatsapp|call
+    python run_trader.py notify --message "..."          # one WhatsApp, e.g. from cron
 
     # live — see TRADING.md for the daily routine
     python run_trader.py cycle   --mode live --provider kite  --broker kite  [--override-gates "..."]
@@ -341,6 +342,25 @@ def cmd_alert_test(args) -> int:
     return 0
 
 
+def cmd_notify(args) -> int:
+    """
+    One operator message to WhatsApp, for things outside a cycle that someone
+    must hear about (cron uses it when a job fails or the journal does not
+    verify). It touches no book or journal, so it works when they are broken.
+    """
+    cfg = _cfg(args.mode)
+    a = build_alerter(cfg.mode, cfg.state_dir, journal=None)
+    if a.client is None or not a.cfg.whatsapp_ready:
+        print("[note] alerts not configured; message not sent: " + args.message, file=sys.stderr)
+        return 2
+    a.background = False
+    from trading.engine import CycleReport
+    rep = CycleReport(mode=cfg.mode, started=datetime.now(IST).isoformat(timespec="seconds"))
+    rep.alerts.append(args.message)
+    a.notify(rep, kind="ops")
+    return 0
+
+
 def cmd_replay(args) -> int:
     run_id = datetime.now(IST).strftime("%Y%m%d-%H%M%S")
     base = TradingConfig(mode="replay")
@@ -460,6 +480,11 @@ def main() -> int:
     p.add_argument("--channel", default="whatsapp", choices=("whatsapp", "call"))
     p.add_argument("--mode", default="paper", choices=("paper", "live"))
     p.set_defaults(fn=cmd_alert_test)
+
+    p = sub.add_parser("notify", help="send one operator message to WhatsApp (used by cron on failure)")
+    p.add_argument("--message", required=True)
+    p.add_argument("--mode", default="paper", choices=("paper",))
+    p.set_defaults(fn=cmd_notify)
 
     p = sub.add_parser("replay")
     p.add_argument("--provider", default=None)

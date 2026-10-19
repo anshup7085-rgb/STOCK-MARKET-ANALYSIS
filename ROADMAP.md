@@ -146,7 +146,7 @@ promotion ladder.
 Building alongside (no gate needed, each as its own PR):
 
 - ~~**Alerts** — cycle exit code 3 to Telegram or email, so an UNPROTECTED alert reaches a phone~~ — WhatsApp + call, `trading/alerts.py`
-- ~~**Server setup script** — venv, cron lines, log rotation, the 15:40 `watch` settling pass~~ — `deploy/setup_server.sh`
+- ~~**Server setup script** — venv, cron lines, log retention~~ — `deploy/setup_server.sh` (paper only). The live 15:40 `watch` settling pass stays a hand-run step by design: `watch` is live-only, and no live job goes in cron
 - **Breadth and sector rotation** — so the regime call stops resting on one index
 - **Holiday calendar from the exchange** — once NSE is reachable, fetch and verify instead of copying
 - **Trailing stops / partial exits at T1** — only if replay shows they help *after* costs

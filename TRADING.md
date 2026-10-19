@@ -216,9 +216,11 @@ one-share position you are willing to lose, and watch every step.
 ## Daily routine
 
 **Paper** — after the close, from cron on a machine with market data. On a
-fresh Linux server (Ubuntu/Debian, Python 3.10+, an ordinary user account):
+fresh Linux server (Ubuntu/Debian, Python 3.10+, an ordinary user account — the
+script refuses to run as root):
 
 ```bash
+sudo apt install python3-venv git cron          # stock Ubuntu/Debian lack python3-venv
 git clone <repo> && cd <repo>
 deploy/setup_server.sh --paper-equity 500000 --install-cron
 ```
@@ -228,10 +230,19 @@ add the SDKs), runs the three test suites on that machine and checks that the
 market feed is reachable. It writes `~/.config/nse-trader/env` (mode 600, no
 secrets, for you to fill in), creates the paper book, and installs two cron jobs
 between marker lines, leaving your other jobs alone: the paper cycle at 16:20
-IST Mon–Fri, and `verify` of the journal on Saturdays. The server clock must be
-IST or UTC; any other clock is refused rather than guessed. Re-running it is
-safe. Logs go to `logs/` (kept 400 days). The journal in `state/` is the
-record.
+IST Mon–Fri, and `verify` of the journal on Saturdays. The server's time zone
+must be IST or UTC all year; a zone with daylight saving, or any other offset,
+is refused rather than guessed. Re-running it is safe; a damaged marker block
+is refused and left for you to fix. Logs go to `logs/` (kept 400 days). The
+journal in `state/` is the record. To keep the env file elsewhere, set
+`NSE_TRADER_ENV=/path/to/env` when running setup; the cron lines carry it.
+
+Cron tells nobody when a job fails. `deploy/cron_cycle.sh` does: a cycle that
+exits with anything but 0 or 3, or a journal that does not verify, is sent to
+your WhatsApp through `run_trader.py notify` once alerts are configured. Before
+that it is only in `logs/`. The wrapper also refuses to run, with exit 78, if the
+env file is not yours and mode 600, or holds a TOTP seed, password, PIN, broker
+API secret or the live ack phrase.
 
 The script installs **no live job** and never sets `LIVE_TRADING_ACK`. A paper
 cycle runs whatever strategy `trading/strategy.py` holds — today that is the

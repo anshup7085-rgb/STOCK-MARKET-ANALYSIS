@@ -14,6 +14,7 @@ scans/
 state/
 .DS_Store
 
-# research data cache (Yahoo history): reproducible from research/data.py, not committed
+# frozen research inputs (Yahoo data): not committed. research/MANIFEST.sha256 records
+# them; a re-fetch is a different window and does not reproduce them
 research/cache/
 logs/

@@ -139,6 +139,8 @@ def evaluate(symbols: list[str]) -> dict:
     out["criteria"].append({"id": "B+A:DD", "passed": dd_ok,
                             "detail": f"|maxDD| B+A {abs(res[('B+A', 'full')]['max_dd']):.3f} vs B {abs(res[('B', 'full')]['max_dd']):.3f}"})
     out["passed"] = {"B": b_ok, "B+A": all(ba) and dd_ok}
+    sch = schedule(px)
+    out["rebalance_dates"] = sorted({str(d.date()) for d in pd.concat([sch["M"], sch["E"]])})
     out["first_rebalance"] = str(idx[0].date())
     out["last_rebalance"] = str(idx[-1].date())
     out["holdings_last"] = runs["B"]["holdings"].iloc[-1]

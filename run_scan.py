@@ -24,6 +24,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from pathlib import Path
 
 from market.config import settings
 from market.providers import DataUnavailable, get_provider
@@ -65,6 +66,7 @@ def main() -> int:
 
     out = json.dumps(report, indent=2, default=str)
     if args.json_out:
+        Path(args.json_out).parent.mkdir(parents=True, exist_ok=True)
         with open(args.json_out, "w") as fh:
             fh.write(out)
         print(f"Wrote {args.json_out}: {len(report['candidates'])} analysed, "

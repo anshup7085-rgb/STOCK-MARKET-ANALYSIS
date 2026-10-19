@@ -38,9 +38,14 @@ Pre-registered strategy research — rules and pass criteria committed before th
 data is touched (`research/PREREGISTRATION.md`), judged once:
 
 ```bash
-python -m research.data                             # fetch and freeze the inputs, once
-python run_research.py all --json scans/research_AB.json
+python -m research.data                             # fetch and freeze the inputs, once (refuses to overwrite)
+(cd research/cache && sha256sum -c ../MANIFEST.sha256)   # the inputs the reports used?
+python run_research.py all --json scans/research_AB.json # refuses if they differ
 ```
+
+The cache is Yahoo data and stays out of git, so the reported numbers reproduce
+only from the frozen cache; a fresh fetch is a different window, and
+`run_research.py` says so instead of printing different numbers as the same run.
 
 **Where it stands (2026-10-17): nothing here has a measured edge.** The score
 failed Gate 1 (`reports/2026-10-17-gate1.md`); strategies A, B and B+A failed

@@ -18,30 +18,42 @@ data, and none goes on to paper trading.
 
 | When (UTC) | What |
 |---|---|
-| 2026-10-17 18:34:19 | `PREREGISTRATION.md` committed (`90630fd`). No strategy code had been written and no data had been downloaded. |
-| 2026-10-17 18:34:37 | Inputs cached to `research/cache/` and frozen. SHA-256 of every file is in `research/MANIFEST.sha256` (manifest digest `521be42b…3ea7a`). |
-| later | `research/strategy_a.py` and `strategy_b.py` written from the spec and run once. |
-| later | Two agents, given only `PREREGISTRATION.md` and the frozen cache, rebuilt A and B from scratch without reading this repo's strategy code. |
+| 18:34:19 | `PREREGISTRATION.md` committed (`90630fd`). No code for A or B existed. The data was not unseen, though: the same Yahoo series had already been downloaded and used for Gate 1 and the replay of the retired score, and Gate 1 printed results by year for 2023–2026. |
+| 18:34:37–18:34:53 | Inputs cached to `research/cache/`. |
+| 18:36:00 | `research/data.py` finalised, including the corporate-action back-adjustment. That rule came after the pre-registration and is not part of it (see Data). |
+| 18:36:35 | Two independent rebuilds launched. They were given `PREREGISTRATION.md`, the cache and the repo's loader `research/data.py`, and did not read any strategy or metrics code. Both finished by 18:39. |
+| 18:40:44 | `research/strategy_a.py` and `strategy_b.py` written from the spec, in parallel with the rebuilds, not after them. |
+| 18:43:35 | Results written (`scans/research_AB.json`). Run once. |
+| 18:46:17 | `research/MANIFEST.sha256` written: the SHA-256 of every cached file (digest `521be42b…3ea7a`). |
 
-No parameter, period, cost or criterion was changed after a result was seen.
+All times 2026-10-17 UTC. No parameter, period, cost or criterion was changed
+after a result was seen.
 
 **Replication.** For A the independent rebuild matched to the last printed
 digit: CAGR 6.20%, Sharpe 0.529, max drawdown −25.5%, 144 switches. For B and
 B+A, CAGR, Sharpe and drawdown matched to three digits. Excess return matched to
-within 0.03 percentage points a year: the rebuild solves the cost exactly
-against post-cost equity, while this code applies it multiplicatively. **Every
-pass/fail call is the same in both.** The rebuild also tried the open choices
+within 0.03 percentage points a year. The gap is the EW benchmark's membership
+rule, not the cost method: this code admits HAL from its first bar (an execution
+on 2018-04-02), the rebuild from the first month-end with a close. With the
+rebuild's rule this code gives −0.674%/yr and t = −0.206 for B, against the
+rebuild's −0.673% and −0.206. **Every pass/fail call is the same in both.**
+Data loading was shared, not reproduced: both used `research/data.py`. The rebuild also tried the open choices
 the spec left (EW limited to eligible names, CAGR difference instead of mean
 excess, daily rather than monthly drawdown), and none of them changed any
 criterion.
 
-Reproduce:
+Reproduce, on a machine that holds the frozen cache:
 
 ```bash
-python -m research.data                                   # once; already done
 (cd research/cache && sha256sum -c ../MANIFEST.sha256)    # inputs unchanged
 python run_research.py all --json scans/research_AB.json
 ```
+
+The cache itself is Yahoo data and is not in git. A fresh `python -m research.data`
+downloads a window ending on the day it runs, so it gives different files. The
+manifest proves which inputs were used; it does not preserve them.
+`run_research.py` refuses to run on inputs that do not match the manifest, and
+`research.data` refuses to overwrite an existing cache without `--refetch`.
 
 ## Data
 
@@ -54,10 +66,24 @@ python run_research.py all --json scans/research_AB.json
 - **Stocks:** 46 of the 47 `DEFAULT_UNIVERSE` names, 2,500 bars each (HAL has
   2,112 because it listed in 2018). `TATAMOTORS.NS` no longer resolves on
   Yahoo, as noted in the Gate 1 report.
-- **One corporate-action fix**, using the rule fixed before any result: TRENT
-  had an unadjusted 1:2 bonus on 2026-01-01, so its earlier history was scaled by
-  exactly 2/3. No other jump matched a standard split or bonus factor, and gaps
-  that matched none were left alone.
+- **One corporate-action fix.** TRENT's Yahoo history steps by exactly 2/3 at
+  2026-01-01, and everything before that was scaled by 2/3. The step is the edge
+  of Yahoo's own partial adjustment, not the event. Bars before 2026, and from
+  2026-06-04 on, sit on NSE's 0.05 tick (raw prices). The bars in between do not:
+  they are already × 2/3. So the event looks like a bonus around 2026-06-04,
+  which no source here confirms. The fix gives the right returns either way. The
+  rule was written into `research/data.py` at 18:36, after the pre-registration
+  and before any result, so it is not pre-registered. No other jump matched a
+  standard factor, and gaps that matched none were left alone.
+- **Yahoo placeholder rows.** 100 rows across the stock files (none in `^NSEI`)
+  are Yahoo fill-ins: zero volume, with the price equal to the previous close.
+  90 of them sit on two days that 45 names share: 2025-03-18, and 2026-01-15,
+  which NSE circulars found by search (not read directly) describe as a trading
+  holiday for the Maharashtra municipal elections. So the panel treats at least
+  one closed day as a flat trading day. One placeholder falls on a date the test
+  traded: DLF on 2019-12-02, an EW execution date, so that month EW bought DLF at
+  the previous close. The rows were used as they are; `run_research.py` now
+  lists them.
 
 ## Strategy A — index trend filter
 
@@ -95,12 +121,14 @@ with buy-and-hold over that variant's own dates:
 | SMA 250 | 0.46 | 0.61 | −28.5% | −40.5% |
 | Cash at 6% | 0.66 | 0.60 | −22.6% | −45.4% |
 
-SMA 150 beats buy-and-hold on Sharpe over its own dates, and SMA 250 does not.
-Choosing 150 now, after seeing this, is the curve fit the pre-registration
-exists to prevent. The spread between neighbouring parameters is the result:
-the edge, if any, is not stable. Cash at 6% is closer to what an investor would
-earn in a liquid fund, and it lifts A above buy-and-hold on Sharpe, but the
-primary criterion was cash at 0%, fixed before the run.
+SMA 150 beats buy-and-hold over its own dates only because those dates start
+earlier, in the 2008 fall, which hurts buy-and-hold more. On common dates from
+2008-09-19, none of SMA 150, 200 or 250 beats buy-and-hold on Sharpe: 0.60, 0.53
+and 0.46 against 0.61. Choosing 150 now would be the curve fit the
+pre-registration exists to prevent, and it would not even win. Cash at 6% is closer to what a liquid fund pays,
+but it does not rescue A. If cash earns 6%, 6% is also the risk-free rate for
+both lines, and on that basis A's Sharpe is 0.21 against buy-and-hold's 0.31.
+The table's Sharpe figures use 0% for every line.
 
 ## Strategy B — 12-1 momentum, and B+A
 
@@ -147,8 +175,9 @@ Monthly returns run from 108 rebalances executed between 2017-10-03 and
   filter, not momentum". Neither even got that far.
 - **The benchmark's 16.8% is not an achievable return.** EW is today's large caps,
   bought nine years ago. Many are in the list *because* they rose. Survivorship
-  flatters every line in this table, which is why the comparisons are relative
-  to EW and not to zero.
+  flatters every line built from the stock list: B, B+A and EW. (The Nifty 50
+  row is the real index.) That is why the comparisons are relative to EW and
+  not to zero.
 
 ## The old system's 10-year replay (context)
 
@@ -162,16 +191,17 @@ fills, risk engine, circuit breakers and the journal. It covers 2,500 sessions,
 | Closed trades | 44, all between 2017-03 and 2017-09 |
 | Net result | +₹60,105 on ₹5,00,000 after ₹10,487 of charges |
 | Win rate / net expectancy | 50% / +0.37R, on n = 44 (too few to mean anything) |
-| Worst drawdown | −5.6% |
+| Worst drawdown | −5.5% |
 
 **The headline numbers do not describe ten years.** On 2017-08-10 a −2.17% day
 breached the −2.0% daily-loss limit, and the kill switch engaged as designed.
 Releasing it is a person's decision, and nobody releases it in a replay. So the
 engine took **no new entries for the remaining 2,264 of 2,500 sessions**, and
-open trades ran off through their stops and time exits. The replay's summary did
-not say this. It now does: `replay` reports a `kill_switch` block with the
-date it first stood and the sessions it covered (`trading/replay.py`
-`halt_summary`, test `test_replay_reports_when_the_kill_switch_froze_it`).
+the trades already open ran off through their stops, one target and time exits.
+The replay's summary did not say this. It now does: `replay` reports a
+`kill_switch` block with the date it first stood and the sessions it covered
+(`trading/replay.py` `halt_summary`; tests `test_replay_reports_when_the_kill_switch_froze_it`
+and `test_replay_command_prints_the_halt`).
 
 The replay is not re-run with the breaker loosened. That would mean weakening a
 control to make trades happen, for a score Gate 1 has already retired. What the
@@ -182,13 +212,17 @@ engine honours it for nine years without a single new entry.
 
 - **EOD, delayed, Yahoo.** Occasional bad ticks are possible, and no
   intraday path is modelled. Fills are at the close.
-- **Dividends excluded** throughout, which understates every invested line by roughly
-  1–1.5% a year for the index. The comparison inside each table is like for like.
+- **Dividends excluded** throughout. This is not quite like for like. It
+  understates the always-invested lines (buy-and-hold, EW, Nifty 50) more than A,
+  which is invested 71% of days, and B+A, which is in cash 28 of 108 months. So
+  it flatters those two by roughly (share of time in cash) × (dividend yield).
+  The direction is known; the size depends on a yield this report does not source.
 - **Survivorship bias, severe for B.** The universe has no point-in-time index
   constituents, and the names that fell out of the index are missing.
 - **Costs are flat assumptions:** 0.10% per switch for A, 0.25% per side for B.
-  They are not the fee card in `market/charges.py`. They were fixed before the run
-  and are, if anything, generous for an ETF switch.
+  They are not the fee card in `market/charges.py`. They were fixed before the run.
+  Whether 0.10% is generous for an ETF switch is not shown here: the fee card has
+  no ETF rates.
 - **The index stands in for an ETF.** For A, ETF tracking error and expense ratio
   are not modelled.
 
@@ -200,7 +234,8 @@ engine honours it for nine years without a single new entry.
 2. The execution layer is unaffected and ready for a strategy that earns it.
    Paper and live have nothing to run yet.
 3. Every further idea tested on this same 2017–2026 history spends credibility.
-   Two hold-outs have now been looked at. A next hypothesis is worth testing only
+   The single 2023–2026 hold-out has now been used by Gate 1 (by year), the
+   replay, and A, B and B+A: it is spent. A next hypothesis is worth testing only
    if it brings **new data** or a **new kind of information**, for example
    point-in-time index constituents (which remove the survivorship bias that
    flatters B), or forward paper trading of a pre-registered rule from today.
