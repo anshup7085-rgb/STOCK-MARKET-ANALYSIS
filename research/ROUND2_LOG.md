@@ -9,7 +9,7 @@ Each step with its UTC time, so the order is on record. Commits are on branch
 | — | 2026-10-18 to 19 | Account holder's approval: general authority ("do whatever you deem fit … make profit") given in chat on 2026-10-18. The account holder had not read this specific document before the fetch | chat |
 | 2 | 2026-10-19 15:46:45 | Round-2 code committed, written from the text with no data | commit `c88126d` |
 | 2 | 2026-10-19 15:58:35 | **Size check passed**: 3 false passes in 2,000 synthetic datasets (0.15%; the limit is 20, 1.0%). Mean t −0.32, sd 1.06. Seed 20261018; ETF 1 μ 10%/yr, σ 18%; ETF 2 μ 12%/yr, σ 15%; draws in order, ETF 1 then ETF 2 per dataset | `scans/r2_size.json` (not committed: `scans/` is local) |
-| 2 | 2026-10-21 | Power check, reported only: drift raised by 0.00056 a day while a sleeve's signal is in and lowered while out (calibrated on 40 datasets to an information ratio near 0.84); 2,000 datasets | `scans/r2_power.json` |
+| 2 | 2026-10-21 15:33:09 | Power check, reported only: drift raised by 0.00056 a day while a sleeve's signal is in and lowered while out (calibrated on 40 datasets toward an information ratio of 0.84). 2,000 datasets: realised mean IR 0.77, **P passed in 68.1%** (theory at IR 0.77: about 71%). The statistic finds an effect of the registered size most of the time | `scans/r2_power.json` |
 
 Readings taken where the text left a choice, each the one less favourable to T
 or neutral, recorded before the fetch:
