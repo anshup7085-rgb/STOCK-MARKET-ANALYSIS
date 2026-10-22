@@ -92,11 +92,13 @@ def prepare() -> tuple[dict, object, object, object]:
     out["schedule_failures"] = sch_all.failures
     x201 = sch_all.X[-1] if sch_all.X and sch_all.X[-1] is not None else None
     out["block_check"] = r2.block_breaches(panel, x201)
+    if sch_all.X and sch_all.X[0] is not None and sch_all.X[-1] is not None:
+        # Listed whatever else fails (Amendment 1, item 6): they need only the month-ends and X_1, X_201.
+        out["X1"], out["X201"] = str(sch_all.X[0].date()), str(sch_all.X[-1].date())
+        out["stale_month_ends"] = r2.stale_month_ends(panel, sch_all)
+        out["staleness"] = r2.staleness(panel, sch_all)
     if not sch_all.failures:
         sch = sch_all
-        out["X1"], out["X201"] = str(sch.X[0].date()), str(sch.X[-1].date())
-        out["stale_month_ends"] = r2.stale_month_ends(panel, sch)
-        out["staleness"] = r2.staleness(panel, sch)
     if out["status"] == "evaluable":
         try:
             if sch is None:
