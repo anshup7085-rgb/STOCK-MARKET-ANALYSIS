@@ -18,3 +18,5 @@ state/
 # them; a re-fetch is a different window and does not reproduce them
 research/cache/
 logs/
+research/cache_r2/
+research/.cache_r2.staging/
