@@ -1,8 +1,8 @@
 """
 Round-2 data: calendar, genuine rows, corporate actions, the data audit and the
 schedule, exactly as pre-registered (research/PREREGISTRATION_2.md, sections
-2-4). Raw cached bars only; research.data.load()'s own adjustment is never
-applied to round-2 files.
+2-4, with Amendment 1). Raw cached bars only; research.data.load()'s own
+adjustment is never applied to round-2 files.
 """
 
 from __future__ import annotations
@@ -25,10 +25,16 @@ FACTORS = (1 / 2, 1 / 3, 1 / 4, 1 / 5, 1 / 10, 2 / 3, 3 / 4, 4 / 5, 1 / 20, 1 / 
 FIRST_HOLD = (2010, 2)          # holding month t = 1
 N_MONTHS = 200                  # t = 200 is September 2026
 DEV_LAST = 155                  # development: t = 1..155 (to December 2022)
+END_ROW = pd.Timestamp("2026-10-01")
+SIGNAL_LAGS = (*range(10), 12)  # month-ends a signal uses: Faber M_t..M_{t-9}, T12 M_{t-12}
 
 
 class NotEvaluable(Exception):
-    """A pre-registered stop: T is reported not testable / not evaluable."""
+    """A pre-registered stop (sections 3-4): T is not evaluable."""
+
+
+class NotTestable(NotEvaluable):
+    """A section-2 stop: T is not testable."""
 
 
 @dataclass
@@ -48,13 +54,44 @@ class Panel:
         return Panel(self.sessions, close, self.genuine, self.nsei, self.audit)
 
 
-# -- section 3 -----------------------------------------------------------------
+# -- loading: Amendment 1, section 3 step 0 ------------------------------------------
 
-def calendar(nsei: pd.DataFrame) -> pd.DatetimeIndex:
-    """^NSEI rows, Monday to Friday, less Yahoo placeholder rows."""
-    weekday = nsei[nsei.index.dayofweek < 5]
-    stale = set(data.placeholder_rows(weekday))
-    return pd.DatetimeIndex([d for d in weekday.index if d not in stale])
+def read_raw(symbol: str, cache: Path = CACHE_R2) -> tuple[pd.DataFrame, list[dict]]:
+    """Cached bars as fetched; rows sharing a date reduced to the last in file order."""
+    df = pd.read_csv(cache / data._name(symbol), index_col="date", parse_dates=["date"]).astype(float)
+    dup = df.index.duplicated(keep="last")
+    dropped = [{"date": str(d.date()), **{c: float(v) for c, v in row.items()}}
+               for d, row in df[dup].iterrows()]
+    return df[~dup].sort_index(kind="stable"), dropped
+
+
+def load_raw(cache: Path = CACHE_R2) -> tuple[dict, pd.DataFrame, dict]:
+    dups = {}
+    raw = {}
+    for k in ETFS:
+        raw[k], dups[k] = read_raw(SYMBOLS[k], cache)
+    nsei, dups["NSEI"] = read_raw(SYMBOLS["NSEI"], cache)
+    return raw, nsei, dups
+
+
+# -- section 3 ---------------------------------------------------------------------
+
+def calendar(nsei: pd.DataFrame) -> tuple[pd.DatetimeIndex, dict]:
+    """
+    ^NSEI dates, Monday to Friday, less placeholder rows. Amendment 1: the
+    placeholder test runs on ^NSEI as fetched, weekend rows included; weekend
+    rows are dropped after it.
+    """
+    flagged = set(data.placeholder_rows(nsei))
+    weekday = nsei.index[nsei.index.dayofweek < 5]
+    sessions = pd.DatetimeIndex([d for d in weekday if d not in flagged])
+    alt = set(data.placeholder_rows(nsei[nsei.index.dayofweek < 5]))
+    info = {"raw_first": str(nsei.index[0].date()), "raw_last": str(nsei.index[-1].date()),
+            "raw_rows": len(nsei), "dropped_weekend": int((nsei.index.dayofweek >= 5).sum()),
+            "dropped_placeholder": sorted(str(d.date()) for d in flagged if d.dayofweek < 5),
+            "placeholder_if_tested_after_weekend_drop": sorted(str(d.date()) for d in alt),
+            "first": str(sessions[0].date()), "last": str(sessions[-1].date()), "sessions": len(sessions)}
+    return sessions, info
 
 
 def _candidates(close: pd.Series) -> list[tuple[pd.Timestamp, pd.Timestamp, float, float]]:
@@ -72,7 +109,10 @@ def _candidates(close: pd.Series) -> list[tuple[pd.Timestamp, pd.Timestamp, floa
 
 
 def corporate_actions(close: pd.Series, nsei: pd.Series | None) -> tuple[pd.Series, list[dict]]:
-    """Detect on raw closes, confirm by persistence (and ^NSEI for NIFTYBEES), apply."""
+    """
+    Amendment 1: every test runs on the recorded closes; no candidate is
+    re-detected after an adjustment; confirmed factors apply cumulatively.
+    """
     events = []
     adj = close.copy()
     pos = {d: i for i, d in enumerate(close.index)}
@@ -93,27 +133,34 @@ def corporate_actions(close: pd.Series, nsei: pd.Series | None) -> tuple[pd.Seri
     return adj, events
 
 
-def build_panel(raw: dict[str, pd.DataFrame], nsei: pd.DataFrame) -> Panel:
-    """Sections 2-3 on raw bars. Raises NotEvaluable on a pre-registered stop."""
-    sessions = calendar(nsei)
-    audit: dict = {"calendar": {"first": str(sessions[0].date()), "last": str(sessions[-1].date()),
-                                "sessions": len(sessions),
-                                "nsei_rows_dropped": int(len(nsei) - len(sessions))}}
+def build_panel(raw: dict[str, pd.DataFrame], nsei: pd.DataFrame, dups: dict | None = None) -> Panel:
+    """Sections 2-3 on raw bars. Never raises: the stops are separate checks."""
+    sessions, cal = calendar(nsei)
+    audit: dict = {"NSEI": {**cal, "duplicate_dates_dropped": (dups or {}).get("NSEI", [])}}
     nsei_c = nsei["close"].reindex(sessions)
     close = pd.DataFrame(index=sessions, columns=list(ETFS), dtype=float)
     genuine = pd.DataFrame(False, index=sessions, columns=list(ETFS))
     for k in ETFS:
         df = raw[k]
+        weekend = df.index.dayofweek >= 5
+        off_cal = ~weekend & ~df.index.isin(sessions)
         on_cal = df[df.index.isin(sessions)]
-        good = on_cal[np.isfinite(on_cal["close"]) & (on_cal["close"] > 0) & (on_cal["volume"] > 0)]
+        holder = set(data.placeholder_rows(on_cal))
+        is_holder = on_cal.index.isin(list(holder))
+        zero_vol = ~is_holder & ~(on_cal["volume"] > 0)
+        bad_close = ~is_holder & ~zero_vol & ~(np.isfinite(on_cal["close"]) & (on_cal["close"] > 0))
+        good = on_cal[~is_holder & ~zero_vol & ~bad_close]
         adj, events = corporate_actions(good["close"], nsei_c if k == N else None)
         r = adj / adj.shift(1)
         moves = [{"date": str(d.date()), "ratio": float(x),
                   **({"nsei_move": float(nsei_c.loc[d] / nsei_c.loc[adj.index[i - 1]] - 1)} if k == N else {})}
                  for i, (d, x) in enumerate(r.items()) if i and abs(x - 1) > 0.10]
         audit[k] = {"first": str(df.index[0].date()), "last": str(df.index[-1].date()), "rows": len(df),
-                    "dropped_off_calendar": int(len(df) - len(on_cal)),
-                    "dropped_not_genuine": int(len(on_cal) - len(good)),
+                    "duplicate_dates_dropped": (dups or {}).get(k, []),
+                    "dropped": {"weekend": int(weekend.sum()), "weekday_off_calendar": int(off_cal.sum()),
+                                "placeholder": int(is_holder.sum()), "zero_volume": int(zero_vol.sum()),
+                                "close_not_positive": int(bad_close.sum())},
+                    "genuine_rows": len(good),
                     "corporate_action_candidates": events, "moves_over_10pct": moves}
         close.loc[adj.index, k] = adj.values
         genuine.loc[good.index, k] = True
@@ -123,8 +170,7 @@ def build_panel(raw: dict[str, pd.DataFrame], nsei: pd.DataFrame) -> Panel:
 def month_ends(sessions: pd.DatetimeIndex) -> pd.Series:
     """Last calendar session of each calendar month, indexed by (year, month)."""
     s = sessions.to_series()
-    me = s.groupby([s.index.year, s.index.month]).max()
-    return me
+    return s.groupby([s.index.year, s.index.month]).max()
 
 
 def _month_shift(y: int, m: int, k: int) -> tuple[int, int]:
@@ -134,11 +180,12 @@ def _month_shift(y: int, m: int, k: int) -> tuple[int, int]:
 
 @dataclass
 class Schedule:
-    M: list[pd.Timestamp]           # M[t] for t = 0..200 means M_{t+1}; M_1..M_201
+    M: list[pd.Timestamp]           # M_1..M_201
     X: list[pd.Timestamp]           # X_1..X_201
     deferrals: list[dict]
     month_end: pd.Series            # (year, month) -> session
     hold_month: list[tuple[int, int]]   # (year, month) of holding months 1..200
+    failures: list[dict] = field(default_factory=list)
 
     def M_back(self, t: int, k: int) -> pd.Timestamp:
         """M_{t-k}, for t in 1..201 (month-ends before the window included)."""
@@ -148,21 +195,25 @@ class Schedule:
 
 
 def schedule(panel: Panel, n: int = N_MONTHS, first=FIRST_HOLD, defer_from: int = 1,
-             defer_to: int = 5) -> Schedule:
+             defer_to: int = 5, collect: bool = False) -> Schedule:
     """
     Section 4. X_t is the first session after M_t on which both ETFs have
     genuine rows, within the first five sessions after M_t. G7 reuses this with
-    defer_from=3, defer_to=7.
+    defer_from=3, defer_to=7. With collect=True every failure is listed for the
+    audit instead of raising at the first.
     """
     me = month_ends(panel.sessions)
     sessions = panel.sessions
     both = panel.genuine.all(axis=1)
-    M, X, deferrals, months = [], [], [], []
+    M, X, deferrals, months, failures = [], [], [], [], []
     for t in range(1, n + 2):
         hy, hm = _month_shift(*first, t - 1)
         y, m = _month_shift(hy, hm, -1)
         if (y, m) not in me.index:
-            raise NotEvaluable(f"no session in {y}-{m:02d}")
+            failures.append({"t": t, "reason": f"no session in {y}-{m:02d}"})
+            if not collect:
+                raise NotEvaluable(failures[-1]["reason"])
+            continue
         mt = me.loc[(y, m)]
         i = sessions.get_loc(mt)
         x = None
@@ -173,70 +224,91 @@ def schedule(panel: Panel, n: int = N_MONTHS, first=FIRST_HOLD, defer_from: int 
                     deferrals.append({"t": t, "M": str(mt.date()), "X": str(x.date()), "sessions_after_M": j})
                 break
         if x is None:
-            raise NotEvaluable(f"no common genuine session within {defer_to} sessions after {mt.date()}")
+            failures.append({"t": t, "M": str(mt.date()),
+                             "reason": f"no common genuine session within {defer_to} sessions after {mt.date()}"})
+            if not collect:
+                raise NotEvaluable(failures[-1]["reason"])
         M.append(mt)
         X.append(x)
         if t <= n:
             months.append((hy, hm))
-    return Schedule(M, X, deferrals, me, months)
+    return Schedule(M, X, deferrals, me, months, failures)
 
 
-def check_stops(panel: Panel, sch: Schedule) -> None:
-    """Sections 2, 3.5 and 3.6: stop conditions, the block, month-end staleness."""
-    sessions = panel.sessions
-    jan09 = sch.month_end.loc[(2009, 1)]
+def check_testable(raw: dict, nsei: pd.DataFrame, panel: Panel) -> None:
+    """Section 2: rows (as fetched) on or after 2026-10-01; a genuine row ending January 2009."""
+    for name, df in (("^NSEI", nsei), *((k, raw[k]) for k in ETFS)):
+        if df.index.max() < END_ROW:
+            raise NotTestable(f"{name}: no row dated on or after {END_ROW.date()}")
+    me = month_ends(panel.sessions)
+    if (2009, 1) not in me.index:
+        raise NotTestable("no session in January 2009")
+    i = panel.sessions.get_loc(me.loc[(2009, 1)])
     for k in ETFS:
-        i = sessions.get_loc(jan09)
         if not panel.genuine[k].iloc[max(0, i - 4):i + 1].any():
-            raise NotEvaluable(f"{k}: no genuine row in the five sessions ending {jan09.date()}")
-    end = pd.Timestamp("2026-10-01")
-    if sessions[-1] < end or panel.genuine.loc[panel.genuine.index >= end].sum().min() == 0:
-        raise NotEvaluable("a series has no row dated on or after 2026-10-01")
-    x201 = sch.X[-1]
+            raise NotTestable(f"{k}: no genuine row in the five sessions ending {me.loc[(2009, 1)].date()}")
+
+
+def block_breaches(panel: Panel, x201: pd.Timestamp | None) -> list[dict]:
+    """Section 3.5: every post-adjustment ratio above 1.25 or below 0.80, flagged if in the window."""
+    me = month_ends(panel.sessions)
+    jan09 = me.loc[(2009, 1)] if (2009, 1) in me.index else panel.sessions[0]
+    out = []
     for k in ETFS:
         c = panel.close[k].dropna()
         r = c / c.shift(1)
-        win = r[(r.index >= jan09) & (r.index <= x201)]
-        bad = win[(win > 1.25) | (win < 0.80)]
-        if len(bad):
-            raise NotEvaluable(f"{k}: block rule, ratio {bad.iloc[0]:.3f} on {bad.index[0].date()}")
-    used = {sch.M_back(t, k) for t in range(1, len(sch.X) + 1) for k in range(0, 13)}
+        for d, x in r[(r > 1.25) | (r < 0.80)].items():
+            out.append({"etf": k, "date": str(d.date()), "ratio": float(x),
+                        "in_window": bool(d >= jan09 and (x201 is None or d <= x201))})
+    return out
+
+
+def stale_month_ends(panel: Panel, sch: Schedule) -> list[dict]:
+    """Section 3.6: month-ends a signal uses (t = 1..200) with no genuine row in the five sessions ending there."""
+    used = {sch.M_back(t, k) for t in range(1, N_MONTHS + 1) for k in SIGNAL_LAGS}
+    out = []
     for mt in sorted(used):
-        i = sessions.get_loc(mt)
+        i = panel.sessions.get_loc(mt)
         for k in ETFS:
             if not panel.genuine[k].iloc[max(0, i - 4):i + 1].any():
-                raise NotEvaluable(f"{k}: no genuine row in the five sessions ending {mt.date()}")
+                out.append({"etf": k, "M": str(mt.date())})
+    return out
+
+
+def check_stops(panel: Panel, sch: Schedule) -> None:
+    """Sections 3.5, 3.6 and 4: raises NotEvaluable on the first stop that applies."""
+    if sch.failures:
+        raise NotEvaluable(sch.failures[0]["reason"])
+    bad = [b for b in block_breaches(panel, sch.X[-1]) if b["in_window"]]
+    if bad:
+        raise NotEvaluable(f"{bad[0]['etf']}: block rule, ratio {bad[0]['ratio']:.3f} on {bad[0]['date']}")
+    st = stale_month_ends(panel, sch)
+    if st:
+        raise NotEvaluable(f"{st[0]['etf']}: no genuine row in the five sessions ending {st[0]['M']}")
 
 
 def staleness(panel: Panel, sch: Schedule) -> dict:
     """Section 19 step 5: per FY, share of sessions without a genuine row and of repeated closes."""
     out, stale = {}, False
     s = panel.sessions[(panel.sessions >= sch.X[0]) & (panel.sessions <= sch.X[-1])]
+    fy = pd.Series([d.year if d.month >= 4 else d.year - 1 for d in s], index=s)
     for k in ETFS:
         g = panel.genuine[k].reindex(s)
         c = panel.close[k].reindex(s)
-        fy = pd.Series([d.year if d.month >= 4 else d.year - 1 for d in s], index=s)
-        rows = {}
+        prev_all = panel.close[k].dropna().shift(1)
+        rows, flag = {}, False
         for y in sorted(set(fy)):
             m = fy == y
             gk = g[m]
             cg = c[m][gk]
-            prev = panel.close[k].dropna()
-            prev = prev.shift(1).reindex(cg.index)
-            repeat = float((cg == prev).mean()) if len(cg) else 1.0
+            repeat = float((cg == prev_all.reindex(cg.index)).mean()) if len(cg) else 1.0
             missing = float((~gk).mean())
             rows[f"FY{y}"] = {"missing": missing, "repeated": repeat}
-            if missing > 0.10 or repeat > 0.10:
-                stale = True
-        out[k] = rows
+            flag = flag or missing > 0.10 or repeat > 0.10
+        out[k] = {"by_fy": rows, "stale": flag}
+        stale = stale or flag
     out["stale"] = stale
     return out
-
-
-def load_raw(cache: Path = CACHE_R2) -> tuple[dict[str, pd.DataFrame], pd.DataFrame]:
-    raw = {k: data.load(SYMBOLS[k], adjust=False, cache=cache) for k in ETFS}
-    nsei = data.load(SYMBOLS["NSEI"], adjust=False, cache=cache)
-    return raw, nsei
 
 
 def fy_of(d: pd.Timestamp) -> int:

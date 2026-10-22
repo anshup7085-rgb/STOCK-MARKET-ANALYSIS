@@ -33,13 +33,24 @@ def run_line(name: str, panel: Panel, sch: Schedule, **kw) -> st.Run:
     return st.simulate(name, panel, sch, **kw)
 
 
-def activity(name: str, run: st.Run, w: np.ndarray | None) -> dict:
-    years = N_MONTHS / 12
-    out = {"orders": run.book.orders, "costs_rupees": run.book.costs,
-           "turnover_per_year": run.book.turnover / float(np.mean(run.V)) / years}
-    if w is not None and name != "EXP":
-        out["share_in"] = {k: float((w[:, j] > 0).mean()) for j, k in enumerate(ETFS)}
-        out["switches_per_year"] = float(sum((np.diff(w[:, j]) != 0).sum() for j in range(2)) / years)
+def activity(name: str, run: st.Run, w: np.ndarray | None, sch: Schedule, sl: slice) -> dict:
+    """
+    Amendment 1. On the pre-tax REC price-track run, for holding months t in the
+    slice: orders and rupee costs at sessions in [X_a, X_{b+1}); turnover a year =
+    buys + sells in that span / mean V_t over the slice / years. share_in and
+    switches (w_kt != w_k,t-1 with w_k0 = 0, so an entry at X_1 counts) for T and
+    T12 only.
+    """
+    a, b = sl.start, sl.stop                      # t = a+1 .. b
+    years = (b - a) / 12
+    lo, hi = sch.X[a], sch.X[b]
+    span = [e for e in run.book.log if lo <= e[0] < hi]
+    out = {"orders": len(span), "costs_rupees": float(sum(e[4] for e in span)),
+           "turnover_per_year": float(sum(e[3] for e in span)) / float(np.mean(run.V[a:b])) / years}
+    if w is not None and name in ("T", "T12"):
+        prev = np.vstack([np.zeros((1, 2)), w])[a:b]
+        out["share_in"] = {k: float((w[a:b, j] > 0).mean()) for j, k in enumerate(ETFS)}
+        out["switches_per_year"] = {k: float((w[a:b, j] != prev[:, j]).sum() / years) for j, k in enumerate(ETFS)}
     return out
 
 
@@ -55,11 +66,13 @@ def run_all(panel: Panel, sch: Schedule, stale: bool) -> dict:
                  "identity_gap": ev["identity_gap"]}
     P = dict(ev["P"])
     d = np.array(P.pop("d"))
+    dstar = np.array(P.pop("dstar"))
     out["P"] = P
     w = ev["targets"]["T"]
     Tr, E = ev["runs"]["T"], ev["runs"]["EXP"]
     out["sleeve_contribution"] = next(c["detail"]["h"] for c in ev["criteria"] if c["id"] == "G2")
     fys = np.array([fy_of(__import__("pandas").Timestamp(year=y, month=m, day=1)) for y, m in sch.hold_month])
+    # Amendment 1: the full-window d_t averaged within each FY's holding months (a decomposition of dbar).
     out["dbar_by_fy"] = {f"FY{y}": float(d[fys == y].mean()) for y in sorted(set(fys))}
 
     lines = {}
@@ -71,7 +84,7 @@ def run_all(panel: Panel, sch: Schedule, stale: bool) -> dict:
             continue
         wt = _targets(name, panel, sch)
         lines[name] = {p: st.line_metrics(run, sch, s) for p, s in PERIODS.items()}
-        lines[name]["activity"] = activity(name, run, wt)
+        lines[name]["activity"] = {per: activity(name, run, wt, sch, sl) for per, sl in PERIODS.items()}
         lines[name]["calendar_years"] = st.calendar_returns(run)
         try:
             lines[name]["after_tax"] = after_tax_block(run_line(name, panel, sch, taxed=True))
@@ -120,9 +133,9 @@ def run_all(panel: Panel, sch: Schedule, stale: bool) -> dict:
     out["sensitivities"] = sout
 
     out["reported_only"] = {
-        "ledoit_wolf_sharpe_diff_T_vs_EXP": st.sharpe_diff_hac(Tr.R, E.R),
+        "sharpe_diff_T_vs_EXP_hac_delta": st.sharpe_diff_hac(Tr.R, E.R),
         "regression_T_on_ETFs": st.regression_alpha(Tr.R, Tr.r),
-        "stationary_bootstrap_p": st.stationary_bootstrap_p(d),
+        "stationary_bootstrap_p_on_dstar": st.stationary_bootstrap_p(dstar),
         "t_ge_3": P["t_ge_3"],
     }
     out["schedule"] = {"X1": str(sch.X[0].date()), "X201": str(sch.X[-1].date()), "deferrals": sch.deferrals,

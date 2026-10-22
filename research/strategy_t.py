@@ -114,6 +114,7 @@ class Book:
         self.tax_by_bucket: dict = defaultdict(float)
         self.costs = self.turnover = 0.0
         self.orders = 0
+        self.log: list[tuple] = []                                       # (date, etf, side, notional, cost)
         self._dp: set = set()
 
     def value(self, q: dict) -> float:
@@ -131,6 +132,7 @@ class Book:
         self.costs += cost
         self.turnover += notional
         self.orders += 1
+        self.log.append((d, k, "buy", notional, cost))
         return cost
 
     def sell_costs(self, k: str, notional: float, d) -> tuple[float, float]:
@@ -149,9 +151,13 @@ class Book:
         self.cash += notional - cost
         if self.taxed:
             self._realise(k, u, d, price, cost - stt)
+        if self.units[k] <= 1e-12:                   # Amendment 1: a full exit leaves no dust
+            self.units[k] = 0.0
+            self.lots[k].clear()
         self.costs += cost
         self.turnover += notional
         self.orders += 1
+        self.log.append((d, k, "sell", notional, cost))
         return cost
 
     def credit(self, k: str, amount: float, d, price: float) -> None:
@@ -326,7 +332,7 @@ def simulate(line: str, panel: Panel, sch: Schedule, *, targets: np.ndarray | No
                     book.interest[fy_of(d)] += inc
             if taxed and t <= N_MONTHS and sch.hold_month[t - 1][1] == 4:
                 book.cash -= book.close_fy(sch.hold_month[t - 1][0] - 1)
-                if line != "monthly" and book.cash < 0:
+                if line != "monthly" and book.cash < -0.005:   # Amendment 1: under Rs0.01 is none
                     _fund_shortfall(book, d, q)
             V[t - 1] = book.value(q)
             if t <= N_MONTHS:
@@ -432,6 +438,8 @@ def newey_west_t(dstar: np.ndarray, dbar: float) -> tuple[float, float, int]:
     e = dstar - dbar
     gam = [float(np.sum(e[j:] * e[:n - j]) / n) for j in range(L + 1)]
     S = gam[0] + 2 * sum((1 - j / (L + 1)) * gam[j] for j in range(1, L + 1))
+    if S <= 0:                                   # no variation at all: no evidence
+        return 0.0, max(S, 0.0), L
     return dbar / math.sqrt(S / n), S, L
 
 
@@ -448,7 +456,7 @@ def primary(w: np.ndarray, Tr: Run, E: Run, wbar: np.ndarray) -> dict:
             "ci90_annual": [12 * dbar - 1.645 * se12, 12 * dbar + 1.645 * se12],
             "tracking_error": math.sqrt(12 * S),
             "detectable_80pct": 3.4175 * math.sqrt(12 * S) / math.sqrt(n / 12),
-            "passed": t >= Z_CRIT, "t_ge_3": t >= 3.0, "d": d.tolist()}
+            "passed": t >= Z_CRIT, "t_ge_3": t >= 3.0, "d": d.tolist(), "dstar": dstar.tolist()}
 
 
 def identity_gap(w: np.ndarray, run: Run) -> float:
@@ -464,14 +472,26 @@ def subset_dbar(w: np.ndarray, Tr: Run, idx: np.ndarray, panel: Panel, sch: Sche
 
 
 def max_drawdown(v: pd.Series) -> tuple[float, int]:
+    """
+    Depth on every point; length in calendar sessions (Amendment 1): from a
+    peak's session to the first session back at or above it, or to the end,
+    counted only for stretches that fall below the peak. X_1's two points are
+    one session.
+    """
     peak = v.cummax()
     dd = float((v / peak - 1).min())
-    longest, start, run_peak = 0, 0, v.iloc[0]
-    for i, x in enumerate(v.values):
+    pos = pd.Series(range(len(v.index.unique())), index=v.index.unique())
+    sess = pos.reindex(v.index).values
+    longest, run_peak, peak_pos, fell = 0, v.iloc[0], sess[0], False
+    for x, sp in zip(v.values, sess):
         if x >= run_peak:
-            longest = max(longest, i - start)
-            run_peak, start = x, i
-    longest = max(longest, len(v) - 1 - start)
+            if fell:
+                longest = max(longest, int(sp - peak_pos))
+            run_peak, peak_pos, fell = x, sp, False
+        else:
+            fell = True
+    if fell:
+        longest = max(longest, int(sess[-1] - peak_pos))
     return dd, longest
 
 
@@ -580,20 +600,27 @@ def line_metrics(run: Run, sch: Schedule, months: slice = slice(0, N_MONTHS)) ->
 
 
 def calendar_returns(run: Run) -> dict:
+    """Year-end to year-end on the daily series; the first and last years are marked partial."""
     v = run.daily
     ends = v.groupby(v.index.year).last()
-    prev = v.iloc[0]
+    years = list(ends.index)
+    prev, start = v.iloc[0], v.index[0]
     out = {}
     for y, x in ends.items():
-        out[str(y)] = float(x / prev - 1)
-        prev = x
+        out[str(y)] = {"return": float(x / prev - 1), "partial": y in (years[0], years[-1]),
+                       "from": str(start.date()), "to": str(v[v.index.year == y].index[-1].date())}
+        prev, start = x, v[v.index.year == y].index[-1]
     return out
 
 
 # -- reported only ------------------------------------------------------------------------------
 
 def sharpe_diff_hac(a: np.ndarray, b: np.ndarray) -> dict:
-    """Ledoit & Wolf (2008) HAC delta-method test of SR(a) - SR(b), Newey-West kernel, same L."""
+    """
+    HAC delta-method test of SR(a) - SR(b): Ledoit & Wolf's (2008) gradient and
+    moment vector, with a Newey-West (Bartlett) kernel at the section-11 L in place
+    of their prewhitened quadratic-spectral kernel (Amendment 1).
+    """
     n = len(a)
     mu_a, mu_b = a.mean(), b.mean()
     g_a, g_b = (a ** 2).mean(), (b ** 2).mean()
@@ -630,7 +657,12 @@ def regression_alpha(R: np.ndarray, r: np.ndarray) -> dict:
 
 
 def stationary_bootstrap_p(d: np.ndarray, block: float = 6.0, reps: int = 10_000, seed: int = 20261018) -> float:
-    """Politis & Romano (1994); one-sided p of the mean under the centred null."""
+    """
+    Politis & Romano (1994), on d* (Amendment 1), centred at its mean, circular
+    wrap. Per resample: idx0 = rng.integers(n); jump = rng.random(n) < 1/block;
+    starts = rng.integers(n, size=n); element 0 of jump and starts unused.
+    p = share of resamples with mean(d*[idx] - mean) >= mean.
+    """
     rng = np.random.default_rng(seed)
     n, dbar = len(d), d.mean()
     c = d - dbar
@@ -679,11 +711,12 @@ class Synthetic:
                 mes = []
                 drift = self.mu[j]
                 for i in range(len(days)):
-                    s2 = omega + self.a * prev_shock ** 2 + self.b * s2 if i else var_u
-                    shock = math.sqrt(s2) * eps[i]
-                    x += drift + shock
+                    if i:                                # day 0 closes at exactly 100
+                        s2 = omega + self.a * prev_shock ** 2 + self.b * s2
+                        shock = math.sqrt(s2) * eps[i]
+                        x += drift + shock
+                        prev_shock = shock
                     logp[i, j] = x
-                    prev_shock = shock
                     if self.timing and is_me[i]:
                         mes.append(math.exp(x))
                         if len(mes) >= 10:

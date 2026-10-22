@@ -1,6 +1,8 @@
 # Pre-registration — round 2: strategy T (trend timing on a Nifty ETF and a gold ETF)
 
-Drafted **2026-10-18**, committed **2026-10-19**. It is binding from the commit that adds it. That commit
+Drafted **2026-10-18**, committed **2026-10-19**. It is binding from the commit that adds it.
+**Amended 2026-10-22, before any round-2 series was fetched** (Amendment 1, at the end): readings an
+independent review of the code found the text left open, fixed before the data exists. That commit
 must come **before any round-2 series is fetched, frozen or computed on, and
 before any round-2 code exists.** The git history of this file is the evidence
 of that order.
@@ -863,3 +865,105 @@ data dated after its own commit.
   Newey & West (1994), *Review of Economic Studies* 61(4).
 - Politis & Romano (1994), "The stationary bootstrap", *Journal of the American
   Statistical Association* 89(428).
+
+---
+
+## Amendment 1 — 2026-10-22, before the fetch
+
+An independent review compared the round-2 code with this text before any
+round-2 series existed (`research/cache_r2/` absent). Section 19 allows changes
+only by dated amendment before step 4; these are they. Each either pins a
+reading the text left open, so that two implementers get the same numbers, or
+adds a rule for a case the text did not cover. None changes the hypothesis, the
+statistic, a threshold or a criterion.
+
+**Data (sections 2–3)**
+
+1. **Step 0, duplicate dates.** Before anything else, rows of a fetched file that
+   share a date are reduced to the last such row in file order. The others are
+   dropped, counted and listed in the audit with their OHLCV.
+2. **Calendar (3.1).** `placeholder_rows()` runs on ^NSEI as fetched, weekend rows
+   included; weekend rows are dropped after it. The audit also lists the dates
+   the other order would flag.
+3. **Corporate actions (3.3).** Candidates, the persistence test and the ^NSEI
+   reference test all use the recorded closes of the genuine rows, as fetched. No
+   close is adjusted for another event before these tests, and no candidate is
+   re-detected after an adjustment, so a later candidate inside an earlier one's
+   five-close window counts against the earlier one's persistence. After every
+   candidate is classified, each confirmed factor applies to all rows before its
+   event, cumulatively.
+4. **Drop categories (3.2, audit).** Each ETF row falls in the first that applies:
+   weekend; weekday off the calendar; placeholder (`placeholder_rows()` on the
+   ETF's on-calendar rows); zero volume; close not finite or not above 0. What
+   is left is genuine.
+5. **A failed fetch (2).** A fetch that does not return all three series writes
+   nothing, freezes nothing and may be repeated, at most three attempts in all,
+   each logged with its time. After a third failure T is not testable.
+6. **Stops.** Section 2's tests ("not testable") run on rows as fetched, before
+   the calendar and the schedule. Section 3.6's staleness test covers only the
+   month-ends a signal uses: M_{t−k} for t = 1…200 and k = 0…9 and 12. M_201 fixes
+   X_201 and no signal. The audit is published whatever stop applies, with every
+   block-rule breach and every schedule failure, not only the first.
+
+**Engine and tax (sections 7–9)**
+
+7. **A full exit.** A sale that leaves fewer than 10⁻¹² units of an ETF leaves
+   zero units and no lots. Floating-point residue is not a holding.
+8. **Shortfall (9.5).** A shortfall under ₹0.01 after a tax payment is no
+   shortfall: it stays in cash at 0%, as in section 7.
+9. **Set-off (9.4).** Within the FY being closed, (a) is applied before (b), and
+   both before (c). In (c), brought-forward losses are applied one at a time in
+   the order of the FY in which they arose, oldest first, whatever their
+   character. Where a short-term and a long-term loss arose in the same FY, the
+   short-term one goes first. A short-term loss offsets in order (a), a long-term
+   one in order (b).
+10. **Costs doubled (8, G4).** Every row of the cost table is doubled, the GST
+    rate included (18% → 36% of brokerage, exchange and SEBI charges).
+
+**Criteria and reported numbers (sections 12, 15, 19)**
+
+11. **G6** uses the daily value series of the runs **without tax**. No April
+    payment enters it. Every drawdown row in section 15 uses the same pre-tax
+    series. The after-tax runs are used only for after-tax wealth.
+12. **Degenerate variance.** If S = 0 (no variation at all in d*), t = 0: no
+    evidence. P fails, and every guard and D are still computed.
+13. **Activity (15)** is reported for the full window, development and hold-out,
+    from the pre-tax REC price-track run:
+    - orders and rupee costs: every order at a session in [X_a, X_{b+1}) for
+      holding months a…b;
+    - turnover a year: buys plus sells in that span (two-sided, the X_1 purchases
+      included), divided by the mean of V_t over the slice and by the years;
+    - share in, per sleeve: the mean of 1[w_kt > 0] over the slice (T and T12
+      only);
+    - switches a year, per sleeve: the months in the slice with w_kt ≠ w_k,t−1,
+      taking w_k,0 = 0 so an entry at X_1 counts (T and T12 only).
+14. **d̄ by FY (15)** is the full-window d_t of section 11 averaged over each FY's
+    holding months: a decomposition of d̄. It is not d̄^U and not G3's statistic.
+15. **Longest drawdown (15)** is counted in calendar sessions, from a peak's
+    session to the first session at or above it, or to the end. Only stretches
+    that fall below the peak count. X_1's two points are one session.
+16. **Calendar-year returns (15)** run from year-end value to year-end value on
+    the daily series; the first and last years are marked partial with their
+    dates.
+17. **Bootstrap (15)** resamples d*_t, centred at d̄, circular. Per resample:
+    idx₀ = rng.integers(n); then jump = rng.random(n) < 1/6; then
+    starts = rng.integers(n, size=n), elements 0 unused. One-sided
+    p = #{mean(d*[idx] − d̄) ≥ d̄} / 10,000.
+18. **The Sharpe-difference row (15)** is a HAC delta-method test: Ledoit &
+    Wolf's (2008) moment vector and gradient, with a Newey–West kernel at the
+    section-11 L instead of their prewhitened quadratic-spectral kernel. It is
+    labelled that way, not as Ledoit–Wolf's estimator.
+19. **Synthetic checks (19.2).** Each synthetic ETF closes at exactly 100 on the
+    first day; returns start on the second. The first ETF has μ = 10% and
+    σ = 18% a year, the second μ = 12% and σ = 15%. Per dataset, the first ETF's
+    Student-t draws are taken, then the second's, each as one
+    `standard_t(5, size=days)` call.
+20. **Power check (19.2).** The drift constant is calibrated on a different seed
+    (20261019), from about 300 datasets at each of three constants, by linear
+    interpolation to a mean information ratio of 0.84. The 2,000 reported runs
+    use seed 20261018. Because t's spread across datasets is about 1.2, not 1,
+    expect roughly 75% to pass, not section 14's 80%.
+
+**Outcome labels.** A section-2 stop prints "FAIL — NO TRADE (T is not
+testable: …)", a section 3–4 stop "FAIL — NO TRADE (T is not evaluable: …)".
+

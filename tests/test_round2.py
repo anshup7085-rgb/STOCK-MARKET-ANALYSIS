@@ -160,6 +160,123 @@ def test_a_month_end_with_no_genuine_row_stops_the_test():
     raise AssertionError("an execution more than five sessions late was accepted")
 
 
+def _bars(dates, closes, vols=None):
+    idx = pd.DatetimeIndex(pd.to_datetime(dates), name="date")
+    c = np.asarray(closes, dtype=float)
+    return pd.DataFrame({"open": c, "high": c, "low": c, "close": c,
+                         "volume": np.ones(len(c)) if vols is None else np.asarray(vols, float)}, index=idx)
+
+
+def test_calendar_tests_placeholders_on_the_frame_as_fetched():
+    from research.round2 import calendar
+    # A Saturday special session, then a Monday holiday placeholder copying it.
+    n = _bars(["2024-01-18", "2024-01-19", "2024-01-20", "2024-01-22", "2024-01-23"],
+              [100.0, 101.0, 100.7, 100.7, 102.0], [5, 5, 5, 0, 5])
+    sessions, info = calendar(n)
+    assert pd.Timestamp("2024-01-22") not in sessions and pd.Timestamp("2024-01-20") not in sessions
+    assert info["dropped_placeholder"] == ["2024-01-22"] and info["dropped_weekend"] == 1
+
+
+def test_duplicate_dates_keep_the_last_row_in_file_order():
+    import tempfile
+    from research.round2 import read_raw
+    with tempfile.TemporaryDirectory() as tmp:
+        f = __import__("pathlib").Path(tmp) / "X.csv"
+        f.write_text("date,open,high,low,close,volume\n2024-01-02,1,1,1,10,5\n2024-01-03,1,1,1,11,5\n"
+                     "2024-01-03,1,1,1,12,7\n")
+        df, dropped = read_raw("X", __import__("pathlib").Path(tmp))
+    assert list(df["close"]) == [10.0, 12.0] and dropped[0]["close"] == 11.0
+
+
+def test_two_splits_close_together_leave_the_first_unconfirmed_and_block():
+    from research.round2 import block_breaches, corporate_actions
+    days = pd.bdate_range("2020-01-01", periods=12)
+    close = pd.Series([100.0] * 4 + [50.0, 50.0] + [5.0] * 6, index=days)   # 1/2, then 1/10 two rows later
+    adj, events = corporate_actions(close, None)
+    assert [e["confirmed"] for e in events] == [False, True]
+    assert abs(adj.iloc[4] / adj.iloc[3] - 0.5) < 1e-12, "the unconfirmed step stays as recorded"
+    p = Panel(days, pd.DataFrame({N: adj, G: 100.0}), pd.DataFrame(True, index=days, columns=list(ETFS)))
+    assert any(b["etf"] == N and b["ratio"] < 0.8 for b in block_breaches(p, None))
+
+
+def test_a_full_exit_leaves_no_dust():
+    b = Book(GROWW, 0.0, taxed=True)
+    d = pd.Timestamp("2020-01-01")
+    b.buy(G, 1000.0, d, 3.0)
+    b.sell(G, b.units[G] * 3.0 * (1 + 1e-15), pd.Timestamp("2021-06-01"), 3.0)
+    assert b.units[G] == 0.0 and b.lots[G] == []
+
+
+def test_a_sub_paisa_shortfall_sells_nothing():
+    p = _panel(5)
+    sch = schedule(p)
+    a = simulate("BH-N", p, sch, taxed=True)
+    assert a.book.orders == 2, "BH-N buys once and sells once at liquidation"
+
+
+def test_no_switch_at_all_is_a_recorded_fail_not_a_crash():
+    from research.strategy_t import evaluate
+    days = pd.bdate_range("2009-01-01", "2026-10-09")
+    rising = pd.DataFrame({N: np.linspace(100, 400, len(days)), G: np.linspace(100, 300, len(days))}, index=days)
+    p = Panel(days, rising, pd.DataFrame(True, index=days, columns=list(ETFS)))
+    out = evaluate(p, schedule(p))
+    assert out["P"]["t"] == 0.0 and not out["P"]["passed"]
+    assert next(c for c in out["criteria"] if c["id"] == "G2")["passed"] is False
+    assert out["verdict"].startswith("FAIL")
+
+
+def test_drawdown_length_counts_sessions_that_fell():
+    from research.strategy_t import max_drawdown
+    d = pd.bdate_range("2020-01-01", periods=6)
+    up = pd.Series([1.0, 1.0, 1.1, 1.2, 1.3, 1.4], index=d.insert(0, d[0])[:6])
+    assert max_drawdown(up)[1] == 0, "a series that never falls has no drawdown"
+    v = pd.Series([1.0, 0.99, 1.0, 0.9, 0.95, 1.01], index=pd.DatetimeIndex([d[0], d[0], d[1], d[2], d[3], d[4]]))
+    dd, n = max_drawdown(v)
+    # X_1's two points are one session; back at the peak on d1 ends that stretch (1 session),
+    # and the new peak on d1 is regained on d4: 3 sessions.
+    assert abs(dd - (-0.1)) < 1e-12 and n == 3
+
+
+def test_staleness_ignores_m201_and_not_testable_is_its_own_label():
+    from research.round2 import NotTestable, check_testable, stale_month_ends
+    p = _panel(2)
+    sch = schedule(p)
+    g = p.genuine.copy()
+    last5 = p.sessions[(p.sessions > pd.Timestamp("2026-09-23")) & (p.sessions <= sch.M[-1])]
+    g.loc[last5, G] = False
+    q = Panel(p.sessions, p.close, g)
+    assert stale_month_ends(q, sch) == [], "M_201 fixes X_201 only; no signal uses it"
+    raw = {k: p.close[[k]].rename(columns={k: "close"}).assign(volume=1.0) for k in ETFS}
+    short = {k: v[v.index < pd.Timestamp("2026-10-01")] for k, v in raw.items()}
+    nsei = raw[N]
+    try:
+        check_testable(short, nsei, p)
+    except NotTestable:
+        return
+    raise AssertionError("a series ending before 2026-10-01 was testable")
+
+
+def test_a_failed_fetch_freezes_nothing():
+    import tempfile
+    import run_round2 as rr
+    import research.round2 as r2m
+    old = (r2m.CACHE_R2, r2m.MANIFEST_R2, rr.STAGING, rr.data.fetch)
+    with tempfile.TemporaryDirectory() as tmp:
+        t = __import__("pathlib").Path(tmp)
+        r2m.CACHE_R2, r2m.MANIFEST_R2, rr.STAGING = t / "cache_r2", t / "MANIFEST_r2.sha256", t / ".staging"
+
+        def half(symbols, lookback, cache):
+            cache.mkdir(parents=True, exist_ok=True)
+            (cache / "NIFTYBEES.NS.csv").write_text("date,close\n")
+            return {"GOLDBEES.NS": "unavailable"}
+        rr.data.fetch = half
+        try:
+            assert rr.fetch() == 2
+            assert not r2m.CACHE_R2.exists() and not r2m.MANIFEST_R2.exists() and not rr.STAGING.exists()
+        finally:
+            r2m.CACHE_R2, r2m.MANIFEST_R2, rr.STAGING, rr.data.fetch = old
+
+
 def test_fy_of():
     assert fy_of(pd.Timestamp("2026-03-31")) == 2025 and fy_of(pd.Timestamp("2026-04-01")) == 2026
 
