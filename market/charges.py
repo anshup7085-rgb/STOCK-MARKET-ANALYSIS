@@ -316,3 +316,110 @@ def trade_economics(
         slippage_assumed_pct=slippage_pct,
         warnings=warnings,
     )
+
+
+# ---------------------------------------------------------------------------
+# Equity derivatives (NSE F&O)
+#
+# Rates effective 2026-04-01, each confirmed on 2026-10-22 by two independent
+# skeptics against search extracts of the primary sources (NSE circulars
+# FATAX/73524 and FA/73061, the Income Tax Department's STT page, the brokers'
+# own pages). Not yet checked against a contract note, so verified_on is None.
+#   STT        options: 0.15% of premium, sell side; 0.15% of intrinsic value on
+#              a long option settled in the money. Futures: 0.05%, sell side.
+#   NSE txn    options 0.03553% of premium, futures 0.00183% of value, each side
+#              (from 2026-03-01; the Rs0.01/crore IPFT is inside these figures)
+#   SEBI fee   Rs10/crore (0.0001%) each side: premium for options, value for futures
+#   Stamp      options 0.003% of premium, futures 0.002% of value, buy side only
+#   GST        18% on brokerage + transaction charge + SEBI fee; not on STT or stamp
+#   Brokerage  Rs20 per executed order (Groww both; Zerodha options). Zerodha
+#              futures: the lower of 0.03% or Rs20.
+# Two settlement charges are NOT established by those sources and are taken the
+# way that costs more (research/PREREGISTRATION_3.md, section 9): brokerage on
+# each leg settled in the money, and the SEBI fee on its intrinsic value.
+
+@dataclass(frozen=True)
+class FnoSchedule:
+    name: str
+    brokerage_per_order: float = 20.0
+    fut_brokerage_pct: float | None = None     # Zerodha futures: lower of this % or the flat fee
+    opt_stt_sell_pct: float = 0.15
+    opt_stt_exercise_pct: float = 0.15
+    opt_exchange_pct: float = 0.03553
+    opt_stamp_buy_pct: float = 0.003
+    fut_stt_sell_pct: float = 0.05
+    fut_exchange_pct: float = 0.00183
+    fut_stamp_buy_pct: float = 0.002
+    sebi_pct: float = 0.0001
+    gst_pct: float = 18.0
+    settlement_brokerage: bool = True          # conservative reading, see above
+    settlement_sebi: bool = True               # conservative reading, see above
+    effective_from: str = "2026-04-01"
+    verified_on: str | None = None
+
+    def unverified(self) -> bool:
+        return self.verified_on is None
+
+
+FNO_GROWW = FnoSchedule(name="Groww — equity F&O")
+FNO_ZERODHA = FnoSchedule(name="Zerodha — equity F&O", fut_brokerage_pct=0.03)
+FNO_SCHEDULES = {"groww": FNO_GROWW, "kite": FNO_ZERODHA, "zerodha": FNO_ZERODHA}
+
+
+def _gst(b: CostBreakdown, sched: FnoSchedule) -> CostBreakdown:
+    b.gst = (b.brokerage + b.exchange_txn + b.sebi) * sched.gst_pct / 100.0
+    return b
+
+
+def option_order_costs(premium: float, qty: int, side: str, sched: FnoSchedule) -> CostBreakdown:
+    """One executed option order: `qty` units (lots x lot size) at `premium` per unit."""
+    if qty <= 0:
+        return CostBreakdown()
+    if side not in ("BUY", "SELL"):
+        raise ValueError(f"side must be BUY or SELL, not {side!r}")
+    turnover = premium * qty
+    b = CostBreakdown(
+        brokerage=sched.brokerage_per_order,
+        stt=turnover * sched.opt_stt_sell_pct / 100.0 if side == "SELL" else 0.0,
+        exchange_txn=turnover * sched.opt_exchange_pct / 100.0,
+        sebi=turnover * sched.sebi_pct / 100.0,
+        stamp_duty=turnover * sched.opt_stamp_buy_pct / 100.0 if side == "BUY" else 0.0,
+    )
+    return _gst(b, sched)
+
+
+def option_settlement_costs(intrinsic: float, qty: int, long: bool, sched: FnoSchedule) -> CostBreakdown:
+    """
+    A cash-settled option at expiry. Out of the money (intrinsic 0) costs nothing.
+    In the money: STT on intrinsic value for the holder only, plus the two
+    conservative readings (brokerage per leg, SEBI fee on intrinsic value).
+    """
+    if qty <= 0 or intrinsic <= 0:
+        return CostBreakdown()
+    value = intrinsic * qty
+    b = CostBreakdown(
+        brokerage=sched.brokerage_per_order if sched.settlement_brokerage else 0.0,
+        stt=value * sched.opt_stt_exercise_pct / 100.0 if long else 0.0,
+        sebi=value * sched.sebi_pct / 100.0 if sched.settlement_sebi else 0.0,
+    )
+    return _gst(b, sched)
+
+
+def futures_order_costs(price: float, qty: int, side: str, sched: FnoSchedule) -> CostBreakdown:
+    """One executed futures order of `qty` units at `price`."""
+    if qty <= 0:
+        return CostBreakdown()
+    if side not in ("BUY", "SELL"):
+        raise ValueError(f"side must be BUY or SELL, not {side!r}")
+    value = price * qty
+    brokerage = sched.brokerage_per_order
+    if sched.fut_brokerage_pct is not None:
+        brokerage = min(brokerage, value * sched.fut_brokerage_pct / 100.0)
+    b = CostBreakdown(
+        brokerage=brokerage,
+        stt=value * sched.fut_stt_sell_pct / 100.0 if side == "SELL" else 0.0,
+        exchange_txn=value * sched.fut_exchange_pct / 100.0,
+        sebi=value * sched.sebi_pct / 100.0,
+        stamp_duty=value * sched.fut_stamp_buy_pct / 100.0 if side == "BUY" else 0.0,
+    )
+    return _gst(b, sched)

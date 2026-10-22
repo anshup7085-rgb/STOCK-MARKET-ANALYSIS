@@ -16,6 +16,12 @@ trading/live.py. Read TRADING.md before using `--mode live`.
     python run_trader.py alert-test --channel whatsapp|call
     python run_trader.py notify --message "..."          # one WhatsApp, e.g. from cron
 
+    # F&O paper trading of strategy V (research/PREREGISTRATION_3.md) — see trading/fno/cli.py
+    python run_trader.py fno probe --feed kite
+    python run_trader.py fno init  --feed kite --equity 500000
+    python run_trader.py fno run   --feed kite            # each trading morning, after the token
+    python run_trader.py fno status | evaluate | verify
+
     # live — see TRADING.md for the daily routine
     python run_trader.py cycle   --mode live --provider kite  --broker kite  [--override-gates "..."]
     python run_trader.py cycle   --mode live --provider groww --broker groww [--override-gates "..."]
@@ -486,6 +492,9 @@ def main() -> int:
     p.add_argument("--mode", default="paper", choices=("paper",))
     p.set_defaults(fn=cmd_notify)
 
+    from trading.fno.cli import add_parser as add_fno_parser
+    add_fno_parser(sub)
+
     p = sub.add_parser("replay")
     p.add_argument("--provider", default=None)
     p.add_argument("--symbols", nargs="*", default=None)
@@ -498,6 +507,9 @@ def main() -> int:
     p.set_defaults(fn=cmd_replay)
 
     args = ap.parse_args()
+    if args.cmd == "fno":
+        from trading.fno.cli import dispatch
+        return dispatch(args)
     try:
         return args.fn(args)
     except ConfigError as exc:

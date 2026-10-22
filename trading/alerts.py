@@ -314,6 +314,15 @@ class Alerter:
             self._remember(urgent)
         return outcome
 
+    def send(self, text: str, why: str = "event") -> bool:
+        """One informational WhatsApp (a paper trade opened or settled). Deduplicated, never raises."""
+        if not self._fresh([text]):
+            return False
+        if self._whatsapp(text, why):
+            self._remember([text])
+            return True
+        return False
+
     def notify(self, rep, kind: str = "cycle") -> None:
         """Dispatch a CycleReport. Returns at once; a call escalates in the background."""
         if self.client is None:

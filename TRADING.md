@@ -283,6 +283,77 @@ journal) and gives a forward read on the score, not a strategy worth money.
 | `record-exit --trade-id T --qty N --price P --note S` | Book a fill the broker could not report, from your contract note. Sends nothing; journaled |
 | `replay --equity N [...]` | Walk the whole system through history |
 
+## F&O paper trading — strategy V
+
+A separate, **paper-only** engine in `trading/fno/` trades one pre-registered
+idea: a defined-risk NIFTY weekly iron condor
+(`research/PREREGISTRATION_3.md`).
+
+- **What it trades.** Each week it sells a call and a put about one
+  straddle-width from the index and buys protection 100 points beyond each.
+  It holds to expiry and settles at the official close.
+- **Risk.** The most a trade can lose is fixed when it opens, and it is never
+  more than 1% of paper equity.
+- **What it is not.** It places no order anywhere. There is no `--mode`; it
+  cannot go live.
+
+**What you need**
+
+| Item | Why |
+|---|---|
+| A market-data plan: **Kite Connect** (Zerodha, paid Connect plan) or the **Groww trading API** (paid plan) | Live option quotes with bid and ask. Yahoo has no option data. Both plans were listed at about Rs500 a month when last checked; check the current price before you pay |
+| A machine that stays on 09:45–17:00 IST on trading days | A small VPS or your own computer. Paper needs **no static IP**: the static-IP rule covers orders, and this sends none |
+| Two minutes each trading morning | Mint the day's access token by hand (`python tools/kite_session.py` for Zerodha), export it, start the runner |
+| `pip install kiteconnect` or `pip install growwapi` | The feed's SDK |
+
+**First morning**
+
+```bash
+python run_trader.py fno probe --feed kite      # or --feed groww; prints response shapes, no prices
+python run_trader.py fno init  --feed kite --equity 500000
+```
+
+Send the `probe` output for review before the first entry day. It shows
+whether the lot size, strike interval and expiry weekday match what V expects.
+It also shows whether quotes carry depth and timestamps. **None of those facts
+is hard-coded.**
+
+**Every trading morning**
+
+```bash
+export KITE_API_KEY=... KITE_ACCESS_TOKEN=...   # minted by hand today
+tmux new -s fno 'python run_trader.py fno run --feed kite'
+```
+
+The runner:
+
+- makes a pass now, then one every 15 minutes from 10:00 to 14:00;
+- makes settlement passes at 16:00, 16:30 and 17:00;
+- exits after the last pass.
+
+A day it does not run is visible in the journal as a day with no runner.
+
+**Commands**
+
+| Command | Does |
+|---|---|
+| `fno status` | Paper equity, every trade and its legs, journal integrity |
+| `fno evaluate [--json F]` | The registered statistic and verdict, plus the descriptive record, from the journal alone |
+| `fno verify` | Re-hash the journal chain |
+| `fno flatten --feed F --reason R` | Close the open trade at the touch. It is off-rule and **still counts** |
+| `fno settle --expiry D --value V --source S` | Enter NSE's published close when the two sources disagree |
+| `fno demo` | Synthetic wiring check in a temp directory. Never touches the paper book |
+| `kill --reason R` | Blocks new F&O entries too: `state/KILL` is global |
+
+**What to expect.** About 50 trades a year. Each trade earns a small credit
+most weeks and occasionally loses up to its fixed maximum.
+
+- **The verdict needs an edge of about 0.15R a trade** before two and a half
+  years of weekly trades can show it. A smaller edge will most likely end in
+  FAIL.
+- **Paper profit is not evidence until the verdict says PASS.** The record
+  still measures real costs and fill quality, and any later F&O idea needs those.
+
 ## Known gaps — read before trusting it
 
 - **The strategy is unvalidated.** Gate 1 has not been run on real data. Paper
@@ -373,6 +444,11 @@ state/                       gitignored — account data never goes to git
     execution_policy.json    live only, optional: your signed autonomous policy
     KILL                     mode kill switch (circuit breakers write here)
   replays/<run-id>/replay/   one directory per replay run
+  paper_fno/                 F&O paper book for strategy V
+    book.json                trades, cycles, manual settlement values
+    journal.jsonl            hash-chained; `fno evaluate` reads only this
+    KILL                     F&O-only kill switch
+    runner.lock              one pass at a time
 ```
 
 ## Sources for the regulatory and broker notes
