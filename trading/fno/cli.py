@@ -77,11 +77,19 @@ def cmd_probe(args) -> int:
     from trading.fno.feeds import nse_fsp
     feed = _feed(args.feed)
     out = feed.probe(REGISTERED.underlying)
+    cal = load_calendar()
     d = datetime.now(IST).date() - timedelta(days=1)
     while d.weekday() != 1:                           # the last Tuesday: a likely NIFTY expiry
         d -= timedelta(days=1)
+    while not cal.is_trading_day(d):                  # a holiday moves the expiry to the session before
+        d -= timedelta(days=1)
     value, info = nse_fsp(REGISTERED.underlying, d)
-    out["nse_settlement_file"] = {"expiry_tried": d.isoformat(), "derived": value is not None, **info}
+    out["nse_settlement_file"] = {"expiry_tried": d.isoformat(), "derived": value is not None, "value": value, **info}
+    try:                                              # the intraday explorer also needs the futures
+        futs = [c for c in feed.fno_master(REGISTERED.underlying).contracts if c.right == "FUT"]
+        out["explorer_futures"] = sorted({(c.symbol, c.expiry.isoformat(), c.lot_size) for c in futs}, key=lambda x: x[1])
+    except Exception as exc:
+        out["explorer_futures"] = f"{type(exc).__name__}: {str(exc)[:200]}"
     out["registration"] = registration()
     out["note"] = ("shapes only; check lot size, strike gaps, expiry weekday, that option quotes carry depth and a "
                    "timestamp, and whether NSE's settlement file is reachable from this machine")
