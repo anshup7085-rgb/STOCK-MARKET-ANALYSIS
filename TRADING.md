@@ -485,7 +485,13 @@ Both are flagged and counted separately in the report.
 | `fno explore status` / `verify` | The current book; the journal's hash chain |
 
 **What it needs.** The same data plan and machine as V, on from 09:10 to 15:30.
-The explorer and V can run side by side: they share no state.
+The explorer and V can run side by side: they share no state. Each morning:
+
+```bash
+cd ~/STOCK-MARKET-ANALYSIS && set -a && . ~/.config/nse-trader/env && set +a
+eval "$(.venv/bin/python tools/kite_session.py --eval)"   # today's login, by hand
+deploy/fno_day.sh        # both runners in tmux, logging to logs/
+```
 
 **What to expect.**
 
