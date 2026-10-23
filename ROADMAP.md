@@ -13,6 +13,11 @@ evidence is required before it touches money.
 | Honest failure | Verified — dead feed gives regime unknown, zero candidates, NO TRADE |
 | Market data | **Unblocked** 2026-10-17 — Yahoo allowlisted; 10 years of EOD NSE history |
 | Does the score predict? | **No.** Gate 1 failed on real data, 2026-10-17: Spearman −0.015 over 10,399 non-overlapping trades, net expectancy +0.008R with a 95% CI spanning zero. Kill criterion 1 applies — the score is retired as a ranking tool. See `reports/2026-10-17-gate1.md` |
+| Pre-registered strategies | **A, B and B+A all failed**, 2026-10-17: the index trend filter cut drawdown (−45% → −26%) but lost on Sharpe and switched too often; 12-1 momentum showed no excess over equal weight (t = −0.20). Rebuilt independently from the spec — same pass/fail on every criterion. See `reports/2026-10-17-strategies-AB.md` |
+| Round 2 (ETF trend timing, T) | **Not evaluable → FAIL**, 2026-10-22: Yahoo's NIFTYBEES/GOLDBEES history has zero volume for most of 2012–13 and 10×/100× price errors around the December 2019 unit splits; the registered rules forbid repairs after the data is seen. Confirmed by two clean-room rebuilds. Says nothing about trend timing itself. See `reports/2026-10-22-round2.md` |
+| Round 3 (F&O, strategy V) | **Drafted 2026-10-22, revised 2026-10-23 after independent review; binds before any real option price is seen.** A defined-risk NIFTY weekly iron condor, paper-traded forward from live option quotes, settled at NSE's final settlement price. The engine (`trading/fno/`) is built and tested offline. It refuses real feeds until the registration binds, and starts when a data plan (Kite Connect or Groww) and a market-hours machine exist. It is judged by an anytime-valid betting test; a simulation showed a t-test passes noise 1.6–4.5% of the time on skewed option P&L. A missed week counts as a full loss, so skipping weeks cannot flatter it. See `research/PREREGISTRATION_3.md` |
+| Research budget | Historical family: 5 of 10 slots spent on Indian price history to 2026-10-18. Forward family (declared in PREREGISTRATION_3): V takes forward slot 1 of 10 once it binds |
+| Strategy with a measured edge | **None.** The correct trading output is NO TRADE. V's paper record is a test in progress, not an edge |
 | Sector / breadth | Not built |
 | Tradability gates | Partial — corporate-action detection and a restricted list built; holiday calendar built, holding the rest of 2026 from secondary sources and **unverified** until checked against the NSE circular; F&O ban is not a cash-segment restriction |
 | Portfolio correlation | Built — pre-trade, in the risk engine |
@@ -127,8 +132,8 @@ Each step waits on the one before it. Every step ends at a gate that can say
 |---|---|---|---|---|
 | 0 | Merge PR #1; allowlist the three Yahoo hosts above in this environment | **You** | Feed reachable | — |
 | 1 | **Gate 1** — run `run_backtest.py` on real NSE history and publish the number, whatever it is | Claude (once the feed is open), or you on your own machine | `run_trader.py gates --backtest F` passes Gate 1 | No relationship between score and outcome, or negative after costs — redesign the score before anything else. **Ran 2026-10-17: FAILED — stop applies. Next is a pre-registered new strategy, step 1a.** |
-| 1a | New strategy, pre-registered: hypothesis, rules, data split and pass criteria written and committed **before** the hold-out is touched; developed on 2017–2022, judged once on 2023–2026 | Claude, you approve the hypothesis | Passes Gate 1 on the hold-out | Fails the hold-out — that hypothesis is dead; do not re-test on the same hold-out |
-| 2 | Replay the whole system on the same history, both fee cards | Claude | Trades per month, net expectancy, worst drawdown known | Replay loses money after costs |
+| 1a | New strategy, pre-registered: hypothesis, rules, data split and pass criteria written and committed **before** the hold-out is touched; developed on 2017–2022, judged once on 2023–2026 | Claude, you approve the hypothesis | Passes Gate 1 on the hold-out | Fails the hold-out — that hypothesis is dead; do not re-test on the same hold-out. **Ran 2026-10-17: A, B and B+A all FAILED. The 2023–2026 hold-out is now spent; the next hypothesis needs new data (point-in-time constituents) or a forward test from today. Round 2 (T, ETF trend timing) registered 2026-10-19: not evaluable on Yahoo's data, FAIL. Next: forward-only registrations, paper-traded from their commit date.** |
+| 2 | Replay the whole system on the same history, both fee cards | Claude | Trades per month, net expectancy, worst drawdown known | Replay loses money after costs. **Ran 2026-10-17 on the retired score: the −2% daily-loss breaker fired on 2017-08-10 and, unreleased, froze entries for 2,264 of 2,500 sessions — the breaker works; the strategy is moot. Replay now reports such halts.** |
 | 3 | Small cloud server with a static IP; cron `cycle --mode paper` daily at 16:20 | **You** set it up; Claude writes the setup script | First real-time paper trade journaled | — |
 | 4 | **Gate 2** — 60 paper trades on a real feed, positive net expectancy; holiday calendar verified | Time | `gates` passes Gate 2 | Paper expectancy ≤ 0 |
 | 5 | Broker setup for live: Kite Connect and/or Groww API plan, static IP registered, DDPI, verified charge rates from a real contract note | **You** | One-share test order placed and protected by hand-watched `cycle` + `watch` | Any step of the order lifecycle misbehaves — fix before sizing up |
@@ -143,8 +148,8 @@ promotion ladder.
 
 Building alongside (no gate needed, each as its own PR):
 
-- **Alerts** — cycle exit code 3 to Telegram or email, so an UNPROTECTED alert reaches a phone
-- **Server setup script** — venv, cron lines, log rotation, the 15:40 `watch` settling pass
+- ~~**Alerts** — cycle exit code 3 to Telegram or email, so an UNPROTECTED alert reaches a phone~~ — WhatsApp + call, `trading/alerts.py`
+- ~~**Server setup script** — venv, cron lines, log retention~~ — `deploy/setup_server.sh` (paper only). The live 15:40 `watch` settling pass stays a hand-run step by design: `watch` is live-only, and no live job goes in cron
 - **Breadth and sector rotation** — so the regime call stops resting on one index
 - **Holiday calendar from the exchange** — once NSE is reachable, fetch and verify instead of copying
 - **Trailing stops / partial exits at T1** — only if replay shows they help *after* costs

@@ -1,10 +1,22 @@
 {
-  "_comment": "NSE equity-segment trading holidays. Weekend dates need not be listed. The entries below cover the REST OF 2026 only (from 2026-10-16), taken from secondary sources that all agreed: Angel One, Bajaj Broking, Kotak Neo, smallcase, Paytm Money, Choice (searched 2026-10-16). Earlier 2026 dates were left out: they are past, and sources disagreed on one. NOT verified against the exchange: check the NSE circular ('Trading holidays for the calendar year', nseindia.com -> Circulars), add 2027 when it is published, then set verified_on.",
-  "source": "secondary aggregators (Angel One, Bajaj Broking, Kotak Neo, smallcase, Paytm Money) \u2014 not the NSE circular",
+  "_comment": "NSE equity-segment (Capital Market) trading holidays for 2026. Weekend dates need not be listed. Taken from NSE circular NSE/CMTR/71775 (Ref. 172/2025, 12 Dec 2025, 'Trading Holidays for Calendar Year 2026', 15 weekday holidays) and NSE/CMTR/72260 (12 Jan 2026, which added 2026-01-15). The circulars were read through search-index extracts of the NSE PDFs, checked by two independent searches on 2026-10-19, but not opened directly: this environment cannot reach nseindia.com. Open nsearchives.nseindia.com/content/circulars/CMTR71775.pdf, check the table, then set verified_on. Muhurat trading 2026: Sunday 2026-11-08, timings to be notified by a later circular (a weekend session; the system does not trade it). The 2027 list was not yet published on 2026-10-19.",
+  "source": "NSE circulars NSE/CMTR/71775 (2025-12-12) and NSE/CMTR/72260 (2026-01-12), via search-index extracts; not opened directly",
   "verified_on": null,
   "holidays": {
+    "2026-01-15": "Municipal Corporation Election in Maharashtra (added by NSE/CMTR/72260)",
+    "2026-01-26": "Republic Day",
+    "2026-03-03": "Holi",
+    "2026-03-26": "Shri Ram Navami",
+    "2026-03-31": "Shri Mahavir Jayanti",
+    "2026-04-03": "Good Friday",
+    "2026-04-14": "Dr. Baba Saheb Ambedkar Jayanti",
+    "2026-05-01": "Maharashtra Day",
+    "2026-05-28": "Bakri Id",
+    "2026-06-26": "Muharram",
+    "2026-09-14": "Ganesh Chaturthi",
+    "2026-10-02": "Mahatma Gandhi Jayanti",
     "2026-10-20": "Dussehra",
-    "2026-11-10": "Diwali Balipratipada",
+    "2026-11-10": "Diwali-Balipratipada",
     "2026-11-24": "Prakash Gurpurb Sri Guru Nanak Dev",
     "2026-12-25": "Christmas"
   }

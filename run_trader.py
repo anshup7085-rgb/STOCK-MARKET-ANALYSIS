@@ -14,6 +14,13 @@ trading/live.py. Read TRADING.md before using `--mode live`.
     python run_trader.py flatten --mode paper --reason "..."
     python run_trader.py record-exit --trade-id ID --qty N --price P --note "contract note ..."
     python run_trader.py alert-test --channel whatsapp|call
+    python run_trader.py notify --message "..."          # one WhatsApp, e.g. from cron
+
+    # F&O paper trading of strategy V (research/PREREGISTRATION_3.md) — see trading/fno/cli.py
+    python run_trader.py fno probe --feed kite
+    python run_trader.py fno init  --feed kite --equity 500000
+    python run_trader.py fno run   --feed kite            # each trading morning, after the token
+    python run_trader.py fno status | evaluate | verify
 
     # live — see TRADING.md for the daily routine
     python run_trader.py cycle   --mode live --provider kite  --broker kite  [--override-gates "..."]
@@ -46,7 +53,7 @@ from trading.engine import TradingEngine
 from trading.gates import gate1_backtest, gate2_paper, gate3_live
 from trading.journal import Journal, verify_file
 from trading.live import LiveRefused, authorise_live
-from trading.replay import ReplayProvider, replay_summary, run_replay
+from trading.replay import ReplayProvider, halt_summary, replay_summary, run_replay
 from trading.risk import KillSwitch
 
 
@@ -341,6 +348,25 @@ def cmd_alert_test(args) -> int:
     return 0
 
 
+def cmd_notify(args) -> int:
+    """
+    One operator message to WhatsApp, for things outside a cycle that someone
+    must hear about (cron uses it when a job fails or the journal does not
+    verify). It touches no book or journal, so it works when they are broken.
+    """
+    cfg = _cfg(args.mode)
+    a = build_alerter(cfg.mode, cfg.state_dir, journal=None)
+    if a.client is None or not a.cfg.whatsapp_ready:
+        print("[note] alerts not configured; message not sent: " + args.message, file=sys.stderr)
+        return 2
+    a.background = False
+    from trading.engine import CycleReport
+    rep = CycleReport(mode=cfg.mode, started=datetime.now(IST).isoformat(timespec="seconds"))
+    rep.alerts.append(args.message)
+    a.notify(rep, kind="ops")
+    return 0
+
+
 def cmd_replay(args) -> int:
     run_id = datetime.now(IST).strftime("%Y%m%d-%H%M%S")
     base = TradingConfig(mode="replay")
@@ -376,7 +402,13 @@ def cmd_replay(args) -> int:
     summary = replay_summary(store.load(), cfg.journal_path)
     summary["provider"] = provider.name
     summary["sessions_replayed"] = len(reports)
+    summary["kill_switch"] = halt_summary(reports)
     print(json.dumps(summary, indent=2))
+    if summary["kill_switch"]:
+        h = summary["kill_switch"]
+        print(f"KILL SWITCH stood from {h['first_session']} for {h['sessions_halted']} of "
+              f"{h['sessions_total']} sessions: no new entries in that span, so these figures "
+              "do not describe the whole period.")
     if "MOCK" in provider.name.upper():
         print("SYNTHETIC DATA — this exercises the system, it says nothing about the market.")
     return 0
@@ -455,6 +487,14 @@ def main() -> int:
     p.add_argument("--mode", default="paper", choices=("paper", "live"))
     p.set_defaults(fn=cmd_alert_test)
 
+    p = sub.add_parser("notify", help="send one operator message to WhatsApp (used by cron on failure)")
+    p.add_argument("--message", required=True)
+    p.add_argument("--mode", default="paper", choices=("paper",))
+    p.set_defaults(fn=cmd_notify)
+
+    from trading.fno.cli import add_parser as add_fno_parser
+    add_fno_parser(sub)
+
     p = sub.add_parser("replay")
     p.add_argument("--provider", default=None)
     p.add_argument("--symbols", nargs="*", default=None)
@@ -467,6 +507,9 @@ def main() -> int:
     p.set_defaults(fn=cmd_replay)
 
     args = ap.parse_args()
+    if args.cmd == "fno":
+        from trading.fno.cli import dispatch
+        return dispatch(args)
     try:
         return args.fn(args)
     except ConfigError as exc:

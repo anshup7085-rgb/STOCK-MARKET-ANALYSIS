@@ -179,9 +179,9 @@ before you pay or trade — these rules changed in 2025–26 and may change agai
 
 | Item | Why | Notes |
 |---|---|---|
-| Zerodha account + Kite Connect app | Order API and, on the paid plan, market data | Third-party write-ups put the Connect plan at Rs500/month and describe a free Personal plan with orders but no market data. Confirm on the Kite developer console. |
+| Zerodha account + Kite Connect app | Order API and, on the paid plan, market data | Zerodha's support pages (checked 2026-10-19): the **Personal** plan is free and covers orders and account APIs but no live or historical data; the **Connect** plan is Rs500/month per API key with live data and historical candles. From October 2026 Zerodha credits the Rs500 in months where you pay at least Rs2,000 of brokerage. Orders alone work on the free plan with `--provider yfinance`; the live price check needs the paid plan or Groww data. |
 | **Static IP**, whitelisted on the app | Zerodha accepts API **orders** only from a registered static IP from 1 April 2026; read-only calls work from anywhere | Up to two IPs (primary + secondary). Simplest: a small VPS with a static IP, which is also where cron runs. IPs may only be shared within immediate family. |
-| Demat debit authorisation (DDPI) | Automated **sell** orders of delivery holdings — every stop and target here — need it | Without it, sells wait for a per-sell CDSL authorisation and GTT legs can fail. Confirm the current requirement with Zerodha. |
+| Demat debit authorisation (DDPI) | Automated **sell** orders of delivery holdings — every stop and target here — need it | Without it, sells wait for a per-sell CDSL authorisation and GTT legs can fail. Zerodha charges Rs100 + GST (Rs118) once to activate it (support page, checked 2026-10-19). |
 | A daily manual login | Access tokens expire each morning; SEBI's framework expects a human 2FA login each trading day | `python tools/kite_session.py` — you log in on Zerodha's page; it prints the export line. It never stores your secret or a TOTP seed. |
 | Algo ID, if required | The exchange framework tags algo orders | Ask Zerodha whether a self-built strategy at this order rate needs one. If they issue one, `export KITE_ALGO_ID=...` and every order carries it. |
 
@@ -189,7 +189,7 @@ before you pay or trade — these rules changed in 2025–26 and may change agai
 
 | Item | Notes |
 |---|---|
-| Groww trading-API subscription | Check current pricing and entitlements on Groww's developer console. |
+| Groww trading-API subscription | groww.in/trade-api (checked 2026-10-19): a free trial with orders but no data; Rs499 + GST a month (shown as an early-bird price against Rs2,000), or Rs4,999 + GST a year. |
 | Static IP | SEBI's framework expects API orders from a registered static IP — check how Groww registers yours. |
 | DDPI | Same reason as Zerodha: automated sells of delivery holdings. |
 | Daily token | Mint `GROWW_ACCESS_TOKEN` yourself (SETUP.md §3b). Never store the TOTP seed — the adapter refuses to start if it sees one. |
@@ -215,12 +215,39 @@ one-share position you are willing to lose, and watch every step.
 
 ## Daily routine
 
-**Paper** — after the close, from cron on a machine with market data:
+**Paper** — after the close, from cron on a machine with market data. On a
+fresh Linux server (Ubuntu/Debian, Python 3.10+, an ordinary user account — the
+script refuses to run as root):
 
-```cron
-# 16:20 IST, Mon–Fri. Exit code 3 means alerts — wire it to mail or a notifier.
-20 16 * * 1-5  cd /path/to/repo && .venv/bin/python run_trader.py cycle --mode paper >> state/paper/cron.log 2>&1
+```bash
+sudo apt install python3-venv git cron          # stock Ubuntu/Debian lack python3-venv
+git clone <repo> && cd <repo>
+deploy/setup_server.sh --paper-equity 500000 --install-cron
 ```
+
+It builds `.venv`, installs the requirements (`--broker kite` / `--broker groww`
+add the SDKs), runs the three test suites on that machine and checks that the
+market feed is reachable. It writes `~/.config/nse-trader/env` (mode 600, no
+secrets, for you to fill in), creates the paper book, and installs two cron jobs
+between marker lines, leaving your other jobs alone: the paper cycle at 16:20
+IST Mon–Fri, and `verify` of the journal on Saturdays. The server's time zone
+must be IST or UTC all year; a zone with daylight saving, or any other offset,
+is refused rather than guessed. Re-running it is safe; a damaged marker block
+is refused and left for you to fix. Logs go to `logs/` (kept 400 days). The
+journal in `state/` is the record. To keep the env file elsewhere, set
+`NSE_TRADER_ENV=/path/to/env` when running setup; the cron lines carry it.
+
+Cron tells nobody when a job fails. `deploy/cron_cycle.sh` does: a cycle that
+exits with anything but 0 or 3, or a journal that does not verify, is sent to
+your WhatsApp through `run_trader.py notify` once alerts are configured. Before
+that it is only in `logs/`. The wrapper also refuses to run, with exit 78, if the
+env file is not yours and mode 600, or holds a TOTP seed, password, PIN, broker
+API secret or the live ack phrase.
+
+The script installs **no live job** and never sets `LIVE_TRADING_ACK`. A paper
+cycle runs whatever strategy `trading/strategy.py` holds — today that is the
+score Gate 1 retired, so a paper book now measures the plumbing (fills, alerts,
+journal) and gives a forward read on the score, not a strategy worth money.
 
 **Live** — by hand, because each order needs you:
 
@@ -255,6 +282,90 @@ one-share position you are willing to lose, and watch every step.
 | `flatten --mode M --reason R` | Exit everything at a marketable limit (live: type FLATTEN) |
 | `record-exit --trade-id T --qty N --price P --note S` | Book a fill the broker could not report, from your contract note. Sends nothing; journaled |
 | `replay --equity N [...]` | Walk the whole system through history |
+
+## F&O paper trading — strategy V
+
+A separate, **paper-only** engine in `trading/fno/` trades one pre-registered
+idea: a defined-risk NIFTY weekly iron condor (`research/PREREGISTRATION_3.md`).
+
+- **What it trades.** Each week it sells a call and a put about one
+  straddle-width from the index and buys protection 100 points beyond each. It
+  holds the position to expiry and settles it at NSE's final settlement price.
+- **Size.** Paper capital is fixed at ₹5,00,000 and the risk budget at ₹5,000 a
+  trade. The most a trade can lose is fixed when it opens.
+- **What it is not.** It places no order anywhere. There is no `--mode`, no
+  operator exit, and no way to go live.
+- **Not yet active.** The engine refuses any real feed until the registration
+  binds (its draft notice is removed and its hash recorded in code).
+
+**What you need**
+
+| Item | Why |
+|---|---|
+| A market-data plan: **Kite Connect** (Zerodha, paid Connect plan) or the **Groww trading API** (paid plan) | Live option quotes with bid, ask and depth. Yahoo has no option data. Both were listed at about Rs500 a month when last checked; check the current price before you pay. Kite's quotes carry depth and a quote timestamp; Groww's quote format is not yet confirmed |
+| A machine that is on from 09:45 to 17:15 IST on trading days | A small VPS or your own computer. Zerodha says read-only API calls need no static IP; for Groww, check |
+| Two minutes each trading morning, **before 10:00** | Mint the day's access token by hand (`python tools/kite_session.py` for Zerodha), export it, start the runner |
+| `pip install kiteconnect` or `pip install growwapi` | The feed's SDK |
+
+**First morning**
+
+```bash
+python run_trader.py fno probe --feed kite      # response shapes (no prices), NSE settlement file reachability
+python run_trader.py fno init  --feed kite      # probes quotes, then starts the one paper book
+```
+
+Send the `probe` output for review. It shows:
+
+- whether the lot size, strike interval and expiry weekday match what V
+  expects (none of them is hard-coded);
+- whether quotes carry depth and a timestamp;
+- whether NSE's settlement file is reachable from your machine.
+
+**Every trading morning, before 10:00**
+
+```bash
+export KITE_API_KEY=... KITE_ACCESS_TOKEN=...   # minted by hand today
+tmux new -s fno 'python run_trader.py fno run --feed kite'
+```
+
+The runner:
+
+- makes a settlement pass at start;
+- makes one entry pass at each of the 17 slots, 10:00 to 14:00 every 15
+  minutes;
+- makes settlement passes at 16:00, 16:30 and 17:00, then exits.
+
+**A slot it misses on an eligible day makes that week count as a full loss in
+the test.** For a Tuesday expiry, the eligible days are the Wednesday and
+Thursday before it. This rule is deliberate: without it, skipping weeks that
+look dangerous could flatter the result.
+
+**Commands**
+
+| Command | Does |
+|---|---|
+| `fno status` | Every trade and its legs, missed weeks, the verdict if reached, journal integrity |
+| `fno evaluate [--json F]` | The registered statistic and verdict, plus the descriptive record, from the journal alone |
+| `fno verify` | Re-hash the journal chain |
+| `fno pass --feed F` | One settlement-only pass now (entries happen only in the runner's slots) |
+| `fno settle --expiry D --value V --source URL` | Enter NSE's published settlement price by hand, only after an automatic attempt on a later trading day failed; the URL must be NSE's |
+| `fno switch-feed --feed F --reason R --failed-sessions D1 D2` | Move the book to the other feed, only after the bound one failed every slot of two eligible days |
+| `fno demo` | Synthetic wiring check in a temp directory. Never touches the paper book |
+| `kill --reason R` | For faults or absence only. It blocks entries, and a blocked week counts as missed |
+
+**What to expect.** At most about 50 trades a year, and fewer in quiet weeks.
+At ₹5,000 risk and a lot of 65, one lot needs a credit of about 25.6 points
+or more. Each trade earns a small credit most weeks, and occasionally loses up
+to its fixed maximum.
+
+- **The verdict needs a large edge**, about 0.15R a trade. That would show up
+  in about 2.5 years of weekly trades. A smaller edge will most likely end in
+  FAIL.
+- **Paper profit is not evidence until the verdict says PASS.** The record
+  still measures real costs and fill quality, and any later F&O idea needs
+  those.
+- **Live trading is far off.** Even after a PASS, V could not be traded live on
+  ₹5,00,000: at the 0.25% live risk cap, one lot needs about ₹16–21 lakh.
 
 ## Known gaps — read before trusting it
 
@@ -346,6 +457,12 @@ state/                       gitignored — account data never goes to git
     execution_policy.json    live only, optional: your signed autonomous policy
     KILL                     mode kill switch (circuit breakers write here)
   replays/<run-id>/replay/   one directory per replay run
+  paper_fno/                 F&O paper book for strategy V (always under the repo's state/)
+    journal.jsonl            hash-chained; the record — state is rebuilt from it every pass
+    book.json                a readable snapshot of the journal, not the record
+    master/YYYY-MM-DD.json   the day's first contract master, used by every pass that day
+    KILL                     F&O-only kill switch
+    runner.lock              one pass at a time
 ```
 
 ## Sources for the regulatory and broker notes

@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
+import sys
 import tempfile
 from datetime import date, datetime, time
 from pathlib import Path
@@ -38,7 +40,7 @@ from trading.gates import gate2_paper
 from trading.journal import Journal, verify_file
 from trading.live import LIVE_ACK_PHRASE, LiveRefused, authorise_live
 from trading.models import Trade, TradeIntent, round_to_tick
-from trading.replay import ReplayProvider, run_replay
+from trading.replay import ReplayProvider, halt_summary, run_replay
 from trading.risk import KillSwitch, RiskContext, RiskEngine
 from trading.strategy import intents_from_scan
 
@@ -1241,6 +1243,8 @@ def test_groww_fee_card_has_delivery_brokerage_floor_and_cap():
     small = round_trip_costs(100.0, 100.0, 10, GROWW_DELIVERY)       # Rs1,000 a leg: 0.1% = Rs1 -> floor Rs5
     big = round_trip_costs(1000.0, 1000.0, 100, GROWW_DELIVERY)      # Rs1,00,000 a leg: 0.1% = Rs100 -> cap Rs20
     assert abs(small.brokerage - 10.0) < 1e-9 and abs(big.brokerage - 40.0) < 1e-9
+    tiny = round_trip_costs(10.0, 10.0, 10, GROWW_DELIVERY)          # Rs100 a leg: floor is 2.5% = Rs2.50, not Rs5
+    assert abs(tiny.brokerage - 5.0) < 1e-9
     assert round_trip_costs(1000.0, 1000.0, 100, DELIVERY).brokerage == 0.0, "Zerodha card unchanged"
     assert GROWW_DELIVERY.unverified()
 
@@ -1291,6 +1295,51 @@ def test_engine_replay_invariants():
     for t in book.closed():
         assert t.charges > 0 and t.net_pnl < t.gross_pnl
     assert len({t.symbol for t in book.active()}) == len(book.active()), "two live trades in one name"
+
+
+def test_replay_reports_when_the_kill_switch_froze_it():
+    # Nobody releases the switch in a replay, so the summary must say from when
+    # it stood — otherwise a run halted in month 6 reads as ten years of trading.
+    root = tmpdir()
+    prov = ReplayProvider(MockProvider(), SYMS, lookback=300)
+    eng = _engine(root, prov)
+    dates = prov.session_dates()
+    reps = run_replay(lambda: eng, prov, dates[-20], dates[-11])
+    assert halt_summary(reps) is None
+    eng.kill.engage("test breaker")
+    reps += run_replay(lambda: eng, prov, dates[-10], None)
+    h = halt_summary(reps)
+    assert h["first_session"] == str(dates[-10]) and "test breaker" in h["reason"]
+    assert h["sessions_halted"] == 10 and h["sessions_total"] == 20
+
+
+REPO = Path(__file__).resolve().parent.parent
+
+
+def _cli(*args, **env):
+    full = {**os.environ, "PYTHONPATH": str(REPO), **env}
+    return subprocess.run([sys.executable, str(REPO / "run_trader.py"), *args],
+                          capture_output=True, text=True, env=full, cwd=REPO, timeout=300)
+
+
+def test_replay_command_prints_the_halt():
+    # The CLI wiring, not just halt_summary: a breaker that trips on day one
+    # must show up in the printed summary and the warning line.
+    root = tmpdir()
+    out = _cli("replay", "--provider", "mock", "--equity", "500000", "--symbols", *SYMS[:6],
+               "--start", "2026-06-01", TRADING_STATE_DIR=str(root), DAILY_LOSS_LIMIT_PCT="0.05")
+    assert out.returncode == 0, out.stderr
+    summary, _ = json.JSONDecoder().raw_decode(out.stdout[out.stdout.index("{"):])
+    h = summary["kill_switch"]
+    assert h and h["sessions_halted"] > 0 and h["sessions_total"] == summary["sessions_replayed"]
+    assert f"KILL SWITCH stood from {h['first_session']}" in out.stdout
+
+
+def test_notify_refuses_quietly_without_alerts():
+    root = tmpdir()
+    env = {k: "" for k in os.environ if k.startswith(("TWILIO_", "ALERT_"))}
+    out = _cli("notify", "--message", "test", TRADING_STATE_DIR=str(root), **env)
+    assert out.returncode == 2 and "not configured" in out.stderr
 
 
 def test_engine_rerun_on_the_same_bar_enters_nothing_new():

@@ -22,6 +22,7 @@ import argparse
 import json
 import sys
 from dataclasses import asdict
+from pathlib import Path
 
 from market.backtest import format_report, run_backtest
 from market.config import settings
@@ -109,6 +110,7 @@ def main() -> int:
             "notes": res.notes,
             "trades": [asdict(t) for t in res.trades],
         }
+        Path(args.json_out).parent.mkdir(parents=True, exist_ok=True)
         with open(args.json_out, "w") as fh:
             json.dump(payload, fh, indent=2, default=str)
         print(f"\nWrote {args.json_out}")
