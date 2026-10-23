@@ -5,6 +5,7 @@
 #   cd ~/STOCK-MARKET-ANALYSIS && set -a && . ~/.config/nse-trader/env && set +a
 #   eval "$(.venv/bin/python tools/kite_session.py --eval)"     # today's login, by hand
 #   deploy/fno_day.sh                                           # starts both runners
+#   deploy/fno_day.sh explore      # or one of them: explore | v
 #
 #   tmux attach -t fno-explore     # watch one (leave it running: Ctrl-b, then d)
 #   tmux ls                        # what is running
@@ -22,9 +23,16 @@ LOGIN='log in first: eval "$(.venv/bin/python tools/kite_session.py --eval)"'
 : "${KITE_ACCESS_TOKEN:?$LOGIN}"
 command -v tmux >/dev/null || { echo "tmux is not installed: sudo apt install -y tmux" >&2; exit 1; }
 
+which="${1:-both}"
+case "$which" in
+  both)    sessions=(fno-explore fno-v) ;;
+  explore) sessions=(fno-explore) ;;
+  v)       sessions=(fno-v) ;;
+  *) echo "usage: $0 [both|explore|v]" >&2; exit 64 ;;
+esac
 day="$(date +%F)"
 mkdir -p logs
-for s in fno-explore fno-v; do
+for s in "${sessions[@]}"; do
   if tmux has-session -t "$s" 2>/dev/null; then
     echo "$s is already running (tmux attach -t $s). Nothing started." >&2
     exit 1
@@ -39,8 +47,12 @@ start() {   # session name, run_trader.py arguments
   echo "started $name  ->  logs/$name-$day.log"
 }
 
-start fno-explore "fno explore run --feed kite"
-start fno-v "fno run --feed kite"
+for s in "${sessions[@]}"; do
+  case "$s" in
+    fno-explore) start fno-explore "fno explore run --feed kite" ;;
+    fno-v)       start fno-v "fno run --feed kite" ;;
+  esac
+done
 echo
 echo "Watch:  tmux attach -t fno-explore   (Ctrl-b then d to leave it running)"
 echo "Explorer only, close its positions and stop its entries:  touch state/fno_explore/KILL"
