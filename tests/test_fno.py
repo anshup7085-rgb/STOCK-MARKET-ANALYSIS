@@ -29,6 +29,7 @@ from trading.fno.evaluate import anchors, decide, evaluate, verify_tolerant
 from trading.fno.feeds import (FnoFeed, GrowwFnoFeed, KiteFnoFeed, MockFnoFeed, fsp_from_bhavcopy,
                                refuse_secrets_in_env)
 from trading.fno.model import ContractMaster, IndexQuote, OptionContract, Quote, from_groww_frame, from_kite_rows
+from trading.fno import strategy_v as sv
 from trading.fno.state import State, contiguous_run
 from trading.fno.strategy_v import (REGISTERED, Plan, Skip, VParams, eligible_sessions, max_loss, plan_entry,
                                     sessions_after, settle, slot_of, slot_times)
@@ -536,7 +537,7 @@ def kinds(eng):
     return [r["type"] for r in eng.journal.records()]
 
 
-def test_mock_feed_is_refused_outside_a_mock_directory_and_a_draft_registration_refuses_real_feeds():
+def test_mock_feed_is_refused_outside_a_mock_directory_and_an_unbound_text_refuses_real_feeds():
     try:
         FnoEngine(MockFnoFeed(Clock(NOW), calendar=CAL), tmpdir() / "paper_fno", calendar=CAL)
         raise AssertionError("synthetic data must never reach the paper journal")
@@ -549,12 +550,28 @@ def test_mock_feed_is_refused_outside_a_mock_directory_and_a_draft_registration_
         def index_quote(self, u): ...
         def quotes(self, c): ...
         def index_close(self, u, d): ...
-    for name in ("x_mock", "paper_fno"):
-        try:
-            FnoEngine(RealLooking(), tmpdir() / name, calendar=CAL)
-            raise AssertionError(f"a real feed must be refused in {name}")
-        except FeedRefused as exc:
-            assert name == "x_mock" or "registered hash" in str(exc) or "draft" in str(exc)
+    try:
+        FnoEngine(RealLooking(), tmpdir() / "x_mock", calendar=CAL)
+        raise AssertionError("a real feed must be refused in a mock directory")
+    except FeedRefused:
+        pass
+    bound = sv.REGISTRATION_SHA256
+    try:
+        sv.REGISTRATION_SHA256 = "0" * 64                  # the text on disk no longer matches
+        FnoEngine(RealLooking(), tmpdir() / "paper_fno", calendar=CAL)
+        raise AssertionError("a text that differs from the registered hash must refuse real feeds")
+    except FeedRefused as exc:
+        assert "registered hash" in str(exc)
+    finally:
+        sv.REGISTRATION_SHA256 = bound
+
+
+def test_the_registration_is_bound_to_the_text_on_disk():
+    import hashlib
+    from trading.fno.engine import DRAFT_MARK, PREREG
+    assert sv.REGISTRATION_SHA256 == hashlib.sha256(PREREG.read_bytes()).hexdigest(), \
+        "research/PREREGISTRATION_3.md changed after it bound (section 17: a change is a new registration)"
+    assert DRAFT_MARK not in PREREG.read_text()
 
 
 def test_the_first_counted_cycle_is_the_one_after_the_current_one():
@@ -1022,7 +1039,7 @@ def test_the_probe_needs_a_quote_timestamp():
         assert "timestamp" in str(exc)
 
 
-def _post_change_trade(fsp):
+def _post_change_trade(fsp, closes=True):
     eng, clock, feed = mock_engine(start=datetime(2026, 12, 7, 9, 0, tzinfo=IST))
     d = date(2026, 12, 7)
     while not eng.state().trades:
@@ -1031,10 +1048,14 @@ def _post_change_trade(fsp):
         d += timedelta(days=1)
     t = next(iter(eng.state().trades.values()))
     e = date.fromisoformat(t["expiry"])
-    eng.fsp_source = lambda u, x: (fsp(feed.index_close(u, x)), {"url": "https://nsearchives.nseindia.com/x"})
+    real = feed.index_close
+    eng.fsp_source = lambda u, x: (fsp(real(u, x)), {"url": "https://nsearchives.nseindia.com/x"})
+    if not closes:                                       # nothing to cross-check NSE's value against
+        feed.index_close = lambda u, x: None
+        eng.second_close = lambda u, x: None
     at(clock, e, 16, 0)
     eng.run_pass()
-    return eng.state().trades[t["id"]], feed.index_close("NIFTY", e)
+    return eng.state().trades[t["id"]], real("NIFTY", e)
 
 
 def test_nse_value_governs_and_its_checks_hold():
@@ -1158,6 +1179,102 @@ def test_boundaries_from_the_review():
     assert r["settlement_costs"]["long_call"]["sebi"] == 1.66
 
 
+
+
+# -- from the planted-bug run: each test below fails if its one check is removed --------------
+
+def test_an_index_read_outside_its_slot_is_a_data_failure():
+    eng, clock, feed = mock_engine()
+    for d in (date(2026, 11, 2), date(2026, 11, 3)):
+        day(eng, clock, d)
+    real = feed.index_quote
+    feed.index_quote = lambda u: dataclasses.replace(real(u), fetched_at=clock.now + timedelta(seconds=150))
+    at(clock, date(2026, 11, 4), 10, 0)
+    eng.run_pass(slot=time(10, 0))
+    p = [r["payload"] for r in eng.journal.records() if r["type"] == "FNO_PASS" and r["payload"].get("slot")][-1]
+    assert p["outcome"] == "data_unavailable" and "outside the 10:00 slot" in p["detail"]
+    assert not eng.state().trades
+
+
+def test_an_unusable_nse_value_waits_even_with_no_close_to_check_it_against():
+    for bad in (float("nan"), 0.0, -5.0, float("inf")):
+        t, _ = _post_change_trade(lambda c, b=bad: b, closes=False)
+        assert t["status"] == "AWAITING_SETTLEMENT", bad
+    t, close = _post_change_trade(lambda c: round(c, 2), closes=False)
+    assert t["status"] == "SETTLED" and t["settlement"]["checks"].get("flag") == "no feed close to cross-check"
+
+
+def _manual_ready():
+    """A trade whose NSE value is missing, with a failed pass on a later trading day and a file on record."""
+    eng, clock, feed = mock_engine(fsp=False, second=lambda u, d: None)
+    t, e = _open_trade(eng, clock)
+    close = round(feed.close_on(e), 2)
+    at(clock, e, 16, 0)
+    eng.run_pass()
+    nxt = e + timedelta(days=1)
+    while not CAL.is_trading_day(nxt):
+        nxt += timedelta(days=1)
+    at(clock, nxt, 10, 0)
+    eng.run_pass()
+    record_manual_settlement(eng.state_dir, t["expiry"], _bhav_file(close, e))
+    at(clock, nxt, 10, 15)
+    return eng, clock, feed, t, close
+
+
+def test_nse_governs_a_hand_supplied_file_once_it_appears():
+    eng, clock, feed, t, close = _manual_ready()
+    eng.fsp_source = lambda u, x: (round(close + 0.05, 2), {"url": "https://nsearchives.nseindia.com/x"})
+    eng.run_pass()
+    s = eng.state().trades[t["id"]]["settlement"]
+    assert s["value"] == round(close + 0.05, 2) and s["source"].startswith("NSE bhavcopy (")
+
+
+def test_a_hand_supplied_file_with_no_close_at_all_waits():
+    eng, clock, feed, t, close = _manual_ready()
+    feed.index_close = lambda u, d: None
+    eng.run_pass()
+    assert eng.state().trades[t["id"]]["status"] == "AWAITING_SETTLEMENT"
+
+
+def test_the_kill_switch_marks_the_cycle_missed_at_once():
+    eng, clock, _ = mock_engine()
+    for d in (date(2026, 11, 2), date(2026, 11, 3)):
+        day(eng, clock, d)
+    (eng.state_dir / "KILL").write_text("test")
+    at(clock, date(2026, 11, 4), 10, 0)
+    eng.run_pass(slot=time(10, 0))
+    cyc = list(eng.state().cycles.values())
+    assert len(cyc) == 1 and cyc[0]["outcome"] == "missed" and cyc[0]["first_unobserved"].endswith("10:00:00+05:30")
+    (eng.state_dir / "KILL").unlink()
+    at(clock, date(2026, 11, 4), 10, 15)
+    eng.run_pass(slot=time(10, 15))
+    assert not eng.state().trades
+
+
+def test_there_is_no_second_feed_switch():
+    eng, clock, feed = mock_engine()
+    eng.journal.append("FNO_FEED_SWITCH", asof="2026-11-02", feed="mock", old="kite", new="mock",
+                       reason="test", cycles=["2026-11-10", "2026-11-17"])
+    feed.key = "groww"
+    try:
+        eng.switch_feed("again", ["2026-11-24", "2026-12-01"])
+        raise AssertionError("a second switch must be refused")
+    except FeedRefused as exc:
+        assert "already switched" in str(exc)
+    finally:
+        feed.key = "mock"
+
+
+def test_a_recorded_verdict_is_the_verdict_and_a_different_recomputation_is_shown_beside_it():
+    path = tmpdir() / "journal.jsonl"
+    j = Journal(path, "fno-paper")
+    a = lambda k, d, **kw: j.append(k, asof=d, feed="kite", **kw)
+    a("FNO_INIT", "2026-11-02", prereg_sha256="h", registered_sha256="h")
+    a("FNO_MASTER", "2026-11-02", date="2026-11-02", sha256="m", summary={}, weekly_run=["2026-11-03", "2026-11-10"])
+    a("FNO_VERDICT", "2026-11-04", verdict="FAIL — futility (recorded)", decided_at=0)
+    out = evaluate(path, now=datetime(2026, 11, 5, 17, 0, tzinfo=IST), cal=CAL, anchor_log=tmpdir() / "n.md")
+    assert out["verdict"] == "FAIL — futility (recorded)"
+    assert out["recomputed_verdict"] != out["verdict"] and "discrepancy" in out
 
 
 if __name__ == "__main__":

@@ -19,7 +19,7 @@ from trading.fno.model import ContractMaster, IndexQuote, OptionContract, Quote
 
 # SHA-256 of research/PREREGISTRATION_3.md at the binding commit. The engine
 # refuses a real feed unless the file on disk matches it (section 17).
-REGISTRATION_SHA256 = None
+REGISTRATION_SHA256 = "4d003adc1b333862f772ad30701d2dc3cd205e6dc6924d38bf930ffe4fc43e49"
 
 
 @dataclass(frozen=True)

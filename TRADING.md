@@ -295,8 +295,9 @@ idea: a defined-risk NIFTY weekly iron condor (`research/PREREGISTRATION_3.md`).
   trade. The most a trade can lose is fixed when it opens.
 - **What it is not.** It places no order anywhere. There is no `--mode`, no
   operator exit, and no way to go live.
-- **Not yet active.** The engine refuses any real feed until the registration
-  binds (its draft notice is removed and its hash recorded in code).
+- **Bound.** The rules bound on 2026-10-23: the text's hash is recorded in code,
+  and the engine refuses a real feed if the text, the parameters or the
+  checked-out code differ from what was committed.
 
 **What you need**
 

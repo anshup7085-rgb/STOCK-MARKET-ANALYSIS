@@ -1,14 +1,10 @@
 # Pre-registration — round 3: strategy V (a defined-risk weekly NIFTY iron condor), forward paper
 
-> **DRAFT — not yet binding.** Independent review is in progress. The binding
-> version is the later commit that removes this notice; it will land before the
-> paper engine observes any real option price.
-
 Drafted **2026-10-22**. Revised **2026-10-23** after an independent review by four
 critics (statistics, market mechanics, ambiguity, project policy) and a code
-review. It binds from the commit that removes the draft notice. That commit
-records this file's SHA-256 in `trading/fno/strategy_v.py`. Before the commit,
-the engine refuses every real feed. Every trade this document judges opens after
+review, then two further reviews. **Bound 2026-10-23** by the commit that removed
+the draft notice. That commit records this file's SHA-256 in
+`trading/fno/strategy_v.py`. Before it, the engine refused every real feed. Every trade this document judges opens after
 it, on data that did not exist when the rules were written.
 
 What the author has seen: no NIFTY option price, chain, implied volatility or
