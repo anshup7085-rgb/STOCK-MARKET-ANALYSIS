@@ -4,12 +4,21 @@ Drafted **2026-10-22**. Revised **2026-10-23** after an independent review by fo
 critics (statistics, market mechanics, ambiguity, project policy) and a code
 review, then two further reviews. **Bound 2026-10-23** by the commit that removed
 the draft notice. That commit records this file's SHA-256 in
-`trading/fno/strategy_v.py`. Before it, the engine refused every real feed. Every trade this document judges opens after
+`trading/fno/strategy_v.py`. Before it, the engine refused every real feed.
+
+**Amended 2026-10-23, before the paper book started** (amendment 1, section 20).
+NSE's settlement file, read for the first time from the runner's machine, holds
+the index's final settlement price itself, not each option's value. Section 3
+step 1 now reads it that way and keeps the first reading as a fallback. Nothing
+else changed. The amended text binds from the commit that records its new
+SHA-256. Every trade this document judges opens after
 it, on data that did not exist when the rules were written.
 
-What the author has seen: no NIFTY option price, chain, implied volatility or
-option P&L from any source, live or historical. This project has never fetched
-option data. What the author does know:
+What the author had seen when the rules were first bound: no NIFTY option
+price, chain, implied volatility or option P&L from any source, live or
+historical. Before amendment 1 the author also saw one past day of NSE's F&O
+file and the shape of Kite's data, all dated before this binding (section 20).
+What the author does know:
 
 - the literature on index-option risk premia (section 2) and the SEBI study of
   individual F&O traders;
@@ -163,11 +172,19 @@ futures idea needs its own registration.
 
   At each settlement pass, in this order:
 
-  1. **NSE's file.** P is derived from NSE's F&O bhavcopy for E, from the
-     settlement prices of the expiring NIFTY options: K + settlement price
-     for an in-the-money call, K − settlement price for a put.
-     - At least four distinct contracts must give exactly the same value,
-       to the paisa. Otherwise this source gives nothing.
+  1. **NSE's file.** P is read from NSE's F&O bhavcopy for E, from the rows
+     of the expiring NIFTY options (`TckrSymb` NIFTY, `FinInstrmTp` IDO,
+     `XpryDt` E). Amended (section 20):
+     - **NSE's layout.** NSE's file gives every expiring index option the
+       index's final settlement price in `SttlmPric`, the same value as
+       `UndrlygPric`. If every expiring row carries one positive `SttlmPric`,
+       equal to its `UndrlygPric` to the paisa, across at least four distinct
+       contracts, P is that value.
+     - **Otherwise,** if the file gives each option its own value: K +
+       settlement price for an in-the-money call, K − settlement price for a
+       put. At least four distinct contracts must give exactly the same value,
+       to the paisa.
+     - Anything else gives nothing from this source.
      - Every column it reads is checked by name.
   2. **The close rule, for expiries before 7 Dec 2026 only.** If NSE's file
      gives nothing, P is the feed's daily index close for E, if Yahoo's
@@ -766,11 +783,43 @@ It spends one **historical** slot (the sixth).
 - **NSE's settlement file is read from NSE's archive.** If the machine cannot
   reach it, settlement waits for the close rule (before 7 Dec 2026) or for an
   entry by hand.
-  - The derivation from option settlement prices assumes NSE's file states
-    each expiring option's final settlement value. If it does not, the
-    four-way agreement check refuses it.
+  - The reading of NSE's file rests on one day's file (19 Oct 2026). If NSE
+    changes its layout to one neither reading in section 3 recognises, the
+    file gives nothing, and from 7 Dec 2026 a trade then settles at R = −1
+    after ten trading days. A settlement that waits is journaled and alerted
+    each day.
 - **The holiday list is unverified.** A wrong list can change which sessions
   are eligible, though not the expiry date, which comes from the master.
 - **START is chosen by the operator once**, by when `fno init` runs.
 - **One structure, one width.** A FAIL says nothing about other premium-selling
   structures. It does mean they need their own registration and slot.
+
+## 20. Amendment 1 (2026-10-23), before the book started
+
+- **What changed.** Section 3, step 1 only: how P is read from NSE's file. The
+  first text derived P as K ± `SttlmPric` from in-the-money options. It
+  assumed `SttlmPric` held each option's own settlement value.
+- **Why.** On 2026-10-23 the runner's machine fetched NSE's F&O bhavcopy for
+  the 19 Oct 2026 expiry (moved from the 20th, a holiday). All 208 expiring
+  NIFTY option rows carried 22888.95 in both `SttlmPric` and `UndrlygPric`.
+  Under the first text, P could never have been read from NSE's file. From
+  7 Dec 2026, when the close rule ends, every trade would have waited ten
+  trading days and then settled at R = −1, whatever the index did.
+- **What the author saw before amending.** All of it is dated before this
+  binding:
+  - that file: about 40 expiring rows printed with their prices, open
+    interest and volumes, and the settlement price 22888.95;
+  - a summary of Kite's contract master for 23 Oct: lot 65, strikes 50 apart,
+    Tuesday expiries moved to Monday by holidays;
+  - the field names of Kite's quotes, without values.
+
+  None of it bears on V's strikes, credit limits, size, slots or statistic.
+  None of those changed.
+- **Status.** Under section 17 this is a rule change, and so a new
+  registration. V as first bound (commit `1718d5c`) never started. No book
+  was opened on a real feed, and no entry or settlement was journaled. It is
+  withdrawn untested, and amended V takes forward slot 1 in its place. A
+  hypothesis that was never tested adds no chance of a false pass, so the
+  family's error budget is unchanged.
+- **The code** at the binding commit reads both layouts, in the order given
+  in section 3.

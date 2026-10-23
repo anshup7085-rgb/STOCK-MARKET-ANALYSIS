@@ -251,25 +251,40 @@ def test_r_bounds_across_settlement_values():
 
 
 def test_fsp_is_derived_from_nse_settlement_prices_or_refused():
+    # NSE's layout (19 Oct 2026): every expiring option row carries the underlying's FSP, equal to UndrlygPric
+    v, info = fsp_from_bhavcopy(pd.DataFrame(_bhav_rows()), "NIFTY", EXP)
+    assert v == 25012.35 and info["reading"] == "uniform" and info["n"] == 10
+    rows = _bhav_rows()
+    rows[3]["UndrlygPric"] = "25012.40"                     # the two columns disagree by five paise
+    assert fsp_from_bhavcopy(pd.DataFrame(rows), "NIFTY", EXP)[0] is None
+    rows = _bhav_rows()
+    rows[0]["SttlmPric"] = "25012.36"                       # one row differs: not uniform, and no per-option reading
+    assert fsp_from_bhavcopy(pd.DataFrame(rows), "NIFTY", EXP)[0] is None
+    v, info = fsp_from_bhavcopy(pd.DataFrame(_bhav_rows()).drop(columns=["UndrlygPric"]), "NIFTY", EXP)
+    assert v is None and "lacks ['UndrlygPric']" in info["error"]
+    assert fsp_from_bhavcopy(pd.DataFrame(_bhav_rows(strikes=[25000])), "NIFTY", EXP)[0] is None     # two contracts
+    assert fsp_from_bhavcopy(pd.DataFrame(_bhav_rows(fsp=0.0)), "NIFTY", EXP)[0] is None
+    noise = (_bhav_rows() + [{"TckrSymb": "NIFTY", "FinInstrmTp": "IDF", "XpryDt": "2026-11-17", "StrkPric": "0",
+                               "OptnTp": "XX", "SttlmPric": "25013.00", "UndrlygPric": "25012.35"}]
+             + _bhav_rows(fsp=70000.0, strikes=[69900, 70100], sym="NIFTYNXT50") + _bhav_rows(fsp=25500.0, xp="2026-11-24"))
+    assert fsp_from_bhavcopy(pd.DataFrame(noise), "NIFTY", EXP)[0] == 25012.35
+
+    # each option's own value, the layout the first text assumed: still read if NSE ever uses it
     rows = [{"TckrSymb": "NIFTY", "FinInstrmTp": "IDO", "XpryDt": "2026-11-17", "StrkPric": k, "OptnTp": r,
              "SttlmPric": max(0.0, 25012.35 - k) if r == "CE" else max(0.0, k - 25012.35)}
             for k in (24900, 24950, 25000, 25050, 25100) for r in ("CE", "PE")]
     v, info = fsp_from_bhavcopy(pd.DataFrame(rows), "NIFTY", EXP)
-    assert v == 25012.35 and info["n"] == 5
+    assert v == 25012.35 and info["n"] == 5 and info["reading"] == "per-option"
     rows[0]["SttlmPric"] = 113.0                         # one contract disagrees by 0.65
     assert fsp_from_bhavcopy(pd.DataFrame(rows), "NIFTY", EXP)[0] is None
-    rows = _bhav_rows()
+    rows = _bhav_rows(per_option=True)
     rows[0]["SttlmPric"] = f"{float(rows[0]['SttlmPric']) + 0.01:.2f}"        # one paisa
     assert fsp_from_bhavcopy(pd.DataFrame(rows), "NIFTY", EXP)[0] is None
-    rows = _bhav_rows()
+    rows = _bhav_rows(per_option=True)
     rows[7]["StrkPric"] = np.nan
     rows[2]["SttlmPric"] = f"{float(rows[2]['SttlmPric']) + 50:.2f}"
     assert fsp_from_bhavcopy(pd.DataFrame(rows), "NIFTY", EXP)[0] is None
-    noise = (_bhav_rows() + [{"TckrSymb": "NIFTY", "FinInstrmTp": "IDF", "XpryDt": "2026-11-17", "StrkPric": "0",
-                               "OptnTp": "XX", "SttlmPric": "25013.00"}]
-             + _bhav_rows(fsp=70000.0, strikes=[69900, 70100], sym="NIFTYNXT50") + _bhav_rows(fsp=25500.0, xp="2026-11-24"))
-    assert fsp_from_bhavcopy(pd.DataFrame(noise), "NIFTY", EXP)[0] == 25012.35
-    three = _bhav_rows(strikes=[24950, 25000, 25100])
+    three = _bhav_rows(strikes=[24950, 25000, 25100], per_option=True)
     assert fsp_from_bhavcopy(pd.DataFrame(three), "NIFTY", EXP)[0] is None
     v, info = fsp_from_bhavcopy(pd.DataFrame([{"TckrSymb": "NIFTY"}]), "NIFTY", EXP)
     assert v is None and "SttlmPric" in info["error"]
@@ -708,14 +723,15 @@ def test_without_nse_the_close_rule_settles_only_before_the_change_date():
     assert eng2.state().trades[t2["id"]]["status"] == "AWAITING_SETTLEMENT"
 
 
-def _bhav_rows(fsp=25012.35, strikes=None, sym="NIFTY", tp="IDO", xp="2026-11-17"):
+def _bhav_rows(fsp=25012.35, strikes=None, sym="NIFTY", tp="IDO", xp="2026-11-17", per_option=False):
+    """NSE's layout by default (every expiring row carries the FSP); per_option: each option's own value."""
     strikes = strikes or [round(fsp / 50) * 50 + d for d in (-100, -50, 0, 50, 100)]
     out = []
     for k in strikes:
         for r in ("CE", "PE"):
-            v = max(0.0, fsp - k) if r == "CE" else max(0.0, k - fsp)
+            v = (max(0.0, fsp - k) if r == "CE" else max(0.0, k - fsp)) if per_option else fsp
             out.append({"TckrSymb": sym, "FinInstrmTp": tp, "XpryDt": xp, "StrkPric": f"{k:.2f}", "OptnTp": r,
-                        "SttlmPric": f"{v:.2f}"})
+                        "SttlmPric": f"{v:.2f}", "UndrlygPric": f"{fsp:.2f}"})
     return out
 
 

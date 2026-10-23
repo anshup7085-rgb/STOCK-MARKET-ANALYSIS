@@ -427,14 +427,24 @@ class GrowwFnoFeed(FnoFeed):
 
 BHAVCOPY_URL = "https://nsearchives.nseindia.com/content/fo/BhavCopy_NSE_FO_0_0_0_{d:%Y%m%d}_F_0000.csv.zip"
 _BHAV_COLS = ("TckrSymb", "FinInstrmTp", "XpryDt", "StrkPric", "OptnTp", "SttlmPric")
+_BHAV_UNDERLYING = "UndrlygPric"
 
 
 def fsp_from_bhavcopy(rows, underlying: str, expiry: date) -> tuple[float | None, dict]:
     """
-    The final settlement price implied by NSE's settlement prices for the
-    expiring index options: K + S for an in-the-money call, K - S for a put.
-    They must agree to the paisa, from at least four contracts; otherwise None.
-    No column of NSE's file is assumed: a missing one is reported by name.
+    PREREGISTRATION_3 section 3, step 1 (amendment 1), from the rows of the
+    expiring index options:
+
+      - NSE's layout: every expiring option carries the underlying's final
+        settlement price in SttlmPric, equal to UndrlygPric (seen on 19 Oct 2026:
+        all 208 expiring NIFTY rows carried 22888.95 in both). If every row
+        carries one positive SttlmPric, equal to its UndrlygPric to the paisa,
+        across at least four distinct contracts, that is P.
+      - Otherwise, if the file gives each option its own value: K + S for an
+        in-the-money call, K - S for a put, at least four distinct contracts
+        agreeing to the paisa.
+
+    Anything else gives None. Every column read is checked by name.
     """
     import pandas as pd
     df = rows if isinstance(rows, pd.DataFrame) else pd.DataFrame(rows)
@@ -444,24 +454,44 @@ def fsp_from_bhavcopy(rows, underlying: str, expiry: date) -> tuple[float | None
     exp = pd.to_datetime(df["XpryDt"], errors="coerce").dt.date
     sel = df.loc[(df["TckrSymb"].astype(str).str.upper() == underlying)
                  & (df["FinInstrmTp"].astype(str).str.upper() == "IDO") & (exp == expiry)]
-    vals, contracts = [], set()
+    parsed = []
     for r in sel.to_dict("records"):
         try:
             k, sp = float(r["StrkPric"]), float(r["SttlmPric"])
         except (TypeError, ValueError):
             continue
-        if not (math.isfinite(k) and math.isfinite(sp)) or sp <= 0:
-            continue
         right = str(r["OptnTp"]).strip().upper()
-        if right not in ("CE", "PE"):
+        if math.isfinite(k) and math.isfinite(sp) and right in ("CE", "PE"):
+            parsed.append((k, right, round(sp, 2), r.get(_BHAV_UNDERLYING)))
+    contracts = {(k, right) for k, right, _, _ in parsed}
+    held = {sp for _, _, sp, _ in parsed}
+    if len(held) == 1 and next(iter(held)) > 0:                  # NSE's layout: one value on every row
+        v = next(iter(held))
+        if len(contracts) < 4:
+            return None, {"error": f"{len(contracts)} expiring contracts for {underlying} {expiry}", "rows": len(sel)}
+        if _BHAV_UNDERLYING not in df.columns:
+            return None, {"error": f"bhavcopy lacks {[_BHAV_UNDERLYING]}", "columns": list(df.columns)[:40]}
+        und = set()
+        for *_, u in parsed:
+            try:
+                und.add(round(float(u), 2))
+            except (TypeError, ValueError):
+                und.add(None)
+        if und != {v}:
+            return None, {"error": f"every expiring row carries {v:.2f}, but {_BHAV_UNDERLYING} is {sorted(und, key=str)[:3]}",
+                          "n": len(contracts)}
+        return v, {"n": len(contracts), "reading": "uniform"}
+    vals, itm = [], set()                                         # each option's own value
+    for k, right, sp, _ in parsed:
+        if sp <= 0:
             continue
         vals.append(round(k + sp if right == "CE" else k - sp, 2))
-        contracts.add((k, right))
-    if len(contracts) < 4:
-        return None, {"error": f"{len(contracts)} in-the-money contracts for {underlying} {expiry}", "rows": len(sel)}
+        itm.add((k, right))
+    if len(itm) < 4:
+        return None, {"error": f"{len(itm)} in-the-money contracts for {underlying} {expiry}", "rows": len(sel)}
     if len(set(vals)) != 1:
-        return None, {"error": f"implied values disagree: {min(vals):.2f} to {max(vals):.2f}", "n": len(contracts)}
-    return vals[0], {"n": len(contracts)}
+        return None, {"error": f"implied values disagree: {min(vals):.2f} to {max(vals):.2f}", "n": len(itm)}
+    return vals[0], {"n": len(itm), "reading": "per-option"}
 
 
 def nse_fsp(underlying: str, expiry: date, timeout: int = 20) -> tuple[float | None, dict]:
