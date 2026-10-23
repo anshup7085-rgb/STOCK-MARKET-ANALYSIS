@@ -5,6 +5,10 @@
 #   cd ~/STOCK-MARKET-ANALYSIS && set -a && . ~/.config/nse-trader/env && set +a
 #   eval "$(.venv/bin/python tools/kite_session.py --eval)"     # today's login, by hand
 #   deploy/fno_day.sh                                           # starts both runners
+#
+# Any time after about 07:00 works: a login lasts until the next morning, the
+# runners wait for the market, and on its first day each book is started for
+# you (V's at 09:20, once quotes are live).
 #   deploy/fno_day.sh explore      # or one of them: explore | v
 #
 #   tmux attach -t fno-explore     # watch one (leave it running: Ctrl-b, then d)
@@ -39,18 +43,18 @@ for s in "${sessions[@]}"; do
   fi
 done
 
-start() {   # session name, run_trader.py arguments
-  local name="$1" args="$2"
+start() {   # session name, deploy/fno_runner.sh argument
+  local name="$1" what="$2"
   tmux new-session -d -s "$name" -c "$REPO" \
     -e KITE_API_KEY="$KITE_API_KEY" -e KITE_ACCESS_TOKEN="$KITE_ACCESS_TOKEN" -e PYTHONPATH=. \
-    "bash -c '.venv/bin/python -u run_trader.py $args 2>&1 | tee -a logs/$name-$day.log'"
+    "bash -c 'deploy/fno_runner.sh $what 2>&1 | tee -a logs/$name-$day.log'"
   echo "started $name  ->  logs/$name-$day.log"
 }
 
 for s in "${sessions[@]}"; do
   case "$s" in
-    fno-explore) start fno-explore "fno explore run --feed kite" ;;
-    fno-v)       start fno-v "fno run --feed kite" ;;
+    fno-explore) start fno-explore explore ;;
+    fno-v)       start fno-v v ;;
   esac
 done
 echo
