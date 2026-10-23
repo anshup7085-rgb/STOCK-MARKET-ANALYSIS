@@ -1,0 +1,22 @@
+{
+  "note": "Strategies for the intraday F&O explorer (python run_trader.py fno explore ...). EXPLORATION, NOT EVIDENCE: paper fills at the touch, net of every cost; a strategy that passes the screen earns a registered forward test, not a claim. Each strategy names a template in trading/fno/library.py and may override any field. To change it, copy this file to config/fno_strategies.json (gitignored, read first; editing a tracked file would stop V's runner). Changing the configuration starts a new generation and restarts the screen.",
+  "underlying": "NIFTY",
+  "capital": 500000,
+  "daily_loss_limit": 15000,
+  "max_open": 4,
+  "max_margin_frac": 0.8,
+  "square_off": "15:15",
+  "screen_alpha": 0.05,
+  "quotes": {"max_age_s": 60, "spread_abs": 1.0, "spread_frac": 0.10, "fut_spread_frac": 0.0002, "window_steps": 15},
+  "strategies": [
+    {"name": "future_breakout", "template": "future_breakout", "risk_budget": 6000, "max_units": 1},
+    {"name": "covered_call", "template": "covered_call", "risk_budget": 7000, "max_units": 1},
+    {"name": "synthetic_put", "template": "synthetic_put", "risk_budget": 6000, "max_units": 1},
+    {"name": "debit_spread", "template": "debit_spread", "risk_budget": 4000, "max_units": 2},
+    {"name": "credit_spread", "template": "credit_spread", "risk_budget": 5000, "max_units": 2},
+    {"name": "short_straddle", "template": "short_straddle", "risk_budget": 9000, "max_units": 1},
+    {"name": "iron_fly", "template": "iron_fly", "risk_budget": 7000, "max_units": 1},
+    {"name": "iron_condor", "template": "iron_condor", "risk_budget": 6000, "max_units": 1},
+    {"name": "long_straddle", "template": "long_straddle", "risk_budget": 18000, "max_units": 1, "enabled": false}
+  ]
+}

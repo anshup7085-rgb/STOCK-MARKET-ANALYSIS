@@ -12,6 +12,7 @@
     fno anchor   [--append]                 # the journal's head, for research/ROUND3_LOG.md (commit and push it)
     fno switch-feed --feed groww --reason "..." --expiries 2026-11-17 2026-11-24
     fno demo     [--weeks 8]                # SYNTHETIC wiring check in a temp dir, never the paper book
+    fno explore ...                         # the intraday multi-leg explorer: see trading/fno/explore_cli.py
 
 Paper only. There is no --mode and no order anywhere: nothing here can trade.
 Exit codes: 0 ok, 2 refused/fatal, 3 completed with alerts.
@@ -33,6 +34,7 @@ from trading.fno.book import RunnerBusy
 from trading.fno.engine import (ANCHOR_LOG, MOCK_DIR_SUFFIX, REPO_ROOT, FeedRefused, FnoEngine,
                                 record_manual_settlement, registration)
 from trading.fno.evaluate import ANCHOR_DAYS, anchor_line, anchors, evaluate
+from trading.fno.explore import Refused
 from trading.fno.strategy_v import REGISTERED, slot_times
 from trading.journal import Journal, verify_file
 
@@ -325,10 +327,13 @@ def add_parser(sub) -> None:
     q.add_argument("--state", default=None, help="parent directory for the demo state (default: a new temp dir)")
     q.set_defaults(fn=cmd_demo)
 
+    from trading.fno.explore_cli import add_explore
+    add_explore(fs)
+
 
 def dispatch(args) -> int:
     try:
         return args.fn(args)
-    except (DataUnavailable, FeedRefused, RunnerBusy, FileNotFoundError, ValueError) as exc:
+    except (DataUnavailable, FeedRefused, Refused, RunnerBusy, FileNotFoundError, ValueError) as exc:
         print(f"[refused] {exc}", file=sys.stderr)
         return 2

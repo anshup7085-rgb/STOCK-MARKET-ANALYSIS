@@ -369,6 +369,134 @@ to its fixed maximum.
 - **Live trading is far off.** Even after a PASS, V could not be traded live on
   ₹5,00,000: at the 0.25% live risk cap, one lot needs about ₹16–21 lakh.
 
+## F&O intraday explorer — many strategies, futures and options, paper
+
+V is one strategy, registered and judged. The explorer is the opposite: a
+workbench that paper-trades **many intraday strategies at once** on NIFTY
+futures and options, so the promising ones can be found and then registered
+for a test of their own.
+
+**EXPLORATION, NOT EVIDENCE.** Watch ten strategies for a month and one will
+look good by luck. A strategy earns a claim only through its own registered
+forward test (forward slots 2–10 in `ROADMAP.md`). The explorer's screen says
+which strategies have earned that test; nothing more.
+
+**What it can trade.** Any mix of legs, written one token per leg:
+
+| Notation | Structure |
+|---|---|
+| `FUT+` / `FUT-` | long or short near-month future |
+| `FUT+ CE-@ATM+2` | covered call: long future, short weekly call two strikes up |
+| `CE+@ATM FUT-` | synthetic put: short future, long at-the-money call (defined risk) |
+| `FUT+ PE+@ATM` | protective put (defined risk) |
+| `CE+@ATM CE-@ATM+2` | bull call spread |
+| `CE-@ATM PE-@ATM` | short straddle |
+| `CE-@EM+0.5 PE-@EM-0.5 CE+@EM+1.0 PE+@EM-1.0` | iron condor, strikes set by the at-the-money straddle |
+| `CE-@PREM:20` | the call whose premium is the highest at or below 20 |
+| `PE+2@ATM/next_weekly` | two lots of next week's at-the-money put |
+
+`python run_trader.py fno explore library` lists the templates (futures
+breakout, covered call and put, synthetic put, protective put, debit and credit
+spreads, long options, short straddle and strangle, iron fly and condor, long
+straddle, ratio spread). `config/fno_strategies.example.json` picks the ones to
+run and sets each one's budget. To change it, copy it to
+`config/fno_strategies.json`, which is gitignored and read first. Editing a
+tracked file would leave uncommitted changes, and V's runner refuses to start
+while there are any. A strategy can use one legs string for every signal,
+or one per direction: `{"long": "...", "short": "..."}`.
+
+**Triggers.**
+
+| Trigger | Fires when |
+|---|---|
+| `at` | its window opens |
+| `orb` | the index breaks the 09:15 to `range_end` range by `buffer_pct`: long above it, short below it |
+| `move` | the index is `pct`% from the open: long or short |
+| `range` | the index is still within `pct`% of the open |
+
+Triggers read only readings the runner has already taken. A trigger that
+needs the open, or the opening range, does not fire if the runner was not
+there to see it.
+
+**How a trade is decided, every pass (one a minute).**
+
+1. **Contracts by rule** from the day's contract master. Lot sizes, strikes and
+   expiries come from the feed; none is hard-coded.
+2. **Quote checks on every leg.**
+   - Two-sided.
+   - Spread within ₹1 or 10% of the mid; 0.02% for a future.
+   - Exchange timestamp under 60 s old.
+   - Top-of-book quantity at least the order's size.
+3. **Risk, fixed in rupees at entry.**
+   - **Defined structures:** the worst loss over a ±20% index band, plus
+     round-trip costs. The structure's value cannot leave its payoff's range,
+     so this bounds the loss at any moment, not just at expiry.
+   - **Undefined ones** (futures, short straddles, covered calls, ratio
+     spreads): the stop × 1.5, plus costs. The stop is checked once a minute
+     and can be overrun. These strategies must have a stop, set in points,
+     rupees or a multiple of the credit.
+4. **Size.** The most units the strategy's budget allows, capped by the freeze
+   quantity.
+5. **Margin** (an estimate, not the broker's figure) must fit in 80% of capital.
+6. **Fill at the touch:** buy at the ask, sell at the bid.
+7. **Mark and exit every pass, at the touch, net of every cost.** A position
+   closes on the first of:
+   - its stop;
+   - its trailing lock;
+   - its target;
+   - its exit time (15:15 at the latest);
+   - the day's loss limit (₹15,000 by default), which also halts the day;
+   - the kill switch.
+
+**What happens when there is no price.** Feeds fail, so two rules decide what
+the record says.
+
+- **No quote at 15:29.** A position with no quote by the last call is booked at
+  its last mark if that mark is under 15 minutes old. Otherwise it is booked at
+  −1R.
+- **Left open overnight.** A position the runner did not square off is closed
+  the same way on the next pass.
+
+Both are flagged and counted separately in the report.
+
+**The screen.**
+
+- **The test.** Each strategy's R (net ÷ risk), in trade order, is fed to the
+  same anytime-valid betting statistic V uses.
+- **The threshold** is m / 0.05 for m strategies in the configuration. This is
+  a Bonferroni split of e-values, valid however long the explorer runs.
+- **When it resets.** Changing the configuration starts a new generation, and
+  the screen restarts.
+- **When it is void.** A trade below −2R voids a strategy's screen.
+- **What a pass means.** A strategy that passes is a candidate for registration,
+  not a result.
+
+**Commands**
+
+| Command | Does |
+|---|---|
+| `fno explore library` | The templates, their legs, triggers and exits |
+| `fno explore payoff "FUT+ CE-@ATM+2" [--feed kite]` | One structure: its legs at the touch, credit or debit, defined or not, worst loss on the band, costs, break-evens, margin estimate, and its P&L for index moves of ±0.5–5%. Mock prices unless a feed is named |
+| `fno explore demo [--days 5]` | SYNTHETIC wiring check in a temp directory |
+| `fno explore init --feed kite` | Start the explorer's paper book, once |
+| `fno explore run --feed kite` | From 09:10: one pass a minute until 15:30, then the scoreboard |
+| `fno explore pass --feed kite` | One pass now |
+| `fno explore report [--json F]` | Per strategy: trades, win rate, mean R, net ₹, drawdown, costs, exits by reason, the screen |
+| `fno explore status` / `verify` | The current book; the journal's hash chain |
+
+**What it needs.** The same data plan and machine as V, on from 09:10 to 15:30.
+The explorer and V can run side by side: they share no state.
+
+**What to expect.**
+
+- **Costs are large.** At the 2026 fee card, a one-lot NIFTY futures round trip
+  costs about ₹1,000–1,250, most of it STT. A 40-point stop on one lot is a
+  ₹2,600 loss before costs.
+- **A ₹5,00,000 paper book holds only a couple of positions at once.** A short
+  straddle or a future needs roughly ₹2 lakh of margin.
+- **Some strategies will skip often**, for budget, margin, spread or depth.
+  Each skip is journaled once a day with its reason.
+
 ## Known gaps — read before trusting it
 
 - **The strategy is unvalidated.** Gate 1 has not been run on real data. Paper
@@ -465,6 +593,11 @@ state/                       gitignored — account data never goes to git
     master/YYYY-MM-DD.json   the day's first contract master, used by every pass that day
     KILL                     F&O-only kill switch
     runner.lock              one pass at a time
+  fno_explore/               the intraday explorer's paper book (always under the repo's state/)
+    journal.jsonl            hash-chained decisions: config generations, entries, exits, skips, halts
+    ticks/YYYY-MM-DD.jsonl   each pass's index reading and open marks (observations, not the record)
+    master/YYYY-MM-DD.json   the day's contract master, options and futures
+    book.json  KILL  runner.lock
 ```
 
 ## Sources for the regulatory and broker notes

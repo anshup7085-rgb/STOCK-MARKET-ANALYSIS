@@ -26,7 +26,7 @@ class OptionContract:
     underlying: str
     expiry: date
     strike: float
-    right: str                   # "CE" | "PE"
+    right: str                   # "CE" | "PE"; "FUT" (strike 0) in the explorer's master
     lot_size: int
     tick_size: float
     freeze_qty: int | None = None
@@ -164,6 +164,47 @@ def from_groww_frame(df: pd.DataFrame, underlying: str) -> list[OptionContract]:
         ))
     if not out:
         raise DataUnavailable(f"Groww's instrument CSV lists no usable {underlying} options")
+    return out
+
+
+def futures_from_kite_rows(rows, underlying: str) -> list[OptionContract]:
+    """The underlying's futures from the same NFO dump, as contracts with right "FUT" and strike 0."""
+    out = []
+    for r in rows:
+        if str(r.get("name", "")).upper() != underlying or r.get("instrument_type") != "FUT":
+            continue
+        if str(r.get("segment", "NFO-FUT")) != "NFO-FUT":
+            continue
+        exp, lot, tick = _to_date(r.get("expiry")), _to_int(r.get("lot_size")), _to_float(r.get("tick_size"))
+        if not (exp and lot and tick):
+            continue
+        out.append(OptionContract(
+            symbol=str(r["tradingsymbol"]), underlying=underlying, expiry=exp, strike=0.0, right="FUT",
+            lot_size=lot, tick_size=tick, exchange=str(r.get("exchange") or "NFO"),
+            feed_id=str(r.get("instrument_token") or "") or None,
+        ))
+    return out
+
+
+def futures_from_groww_frame(df: pd.DataFrame, underlying: str) -> list[OptionContract]:
+    """The underlying's futures from Groww's instrument CSV (instrument_type FUT)."""
+    missing = (_GROWW_COLS - {"strike_price"}) - set(df.columns)
+    if missing:
+        raise DataUnavailable(f"Groww instrument CSV lacks {sorted(missing)}")
+    seg = df["segment"].astype(str).str.upper() if "segment" in df.columns else "FNO"
+    exch = df["exchange"].astype(str).str.upper() if "exchange" in df.columns else "NSE"
+    rows = df.loc[(df["underlying_symbol"].astype(str).str.upper() == underlying)
+                  & (df["instrument_type"].astype(str).str.upper() == "FUT") & (seg == "FNO") & (exch == "NSE")]
+    out = []
+    for r in rows.to_dict("records"):
+        exp, lot, tick = _to_date(r.get("expiry_date")), _to_int(r.get("lot_size")), _to_float(r.get("tick_size"))
+        if not (exp and lot and tick):
+            continue
+        out.append(OptionContract(
+            symbol=str(r["trading_symbol"]), underlying=underlying, expiry=exp, strike=0.0, right="FUT",
+            lot_size=lot, tick_size=tick, freeze_qty=_to_int(r.get("freeze_quantity")), exchange="NSE",
+            feed_id=str(r.get("groww_symbol") or "") or None,
+        ))
     return out
 
 

@@ -33,7 +33,8 @@ from market.calendar import TradingCalendar, load_calendar
 from market.config import IST
 from market.providers.base import DataUnavailable
 from trading.fno.model import (ContractMaster, IndexQuote, OptionContract, Quote, as_ist,
-                               from_groww_frame, from_kite_rows)
+                               from_groww_frame, from_kite_rows, futures_from_groww_frame,
+                               futures_from_kite_rows)
 
 # A broker or API secret, TOTP seed, password or broker PIN. Twilio's API secret is
 # the one exception the project allows (deploy/lib.sh): unattended alerts need it.
@@ -76,6 +77,10 @@ class FnoFeed(ABC):
     def broker_charges(self, legs: list[dict], qty: int) -> dict | None:
         """The broker's own computed charges per order, where its API gives them."""
         return None
+
+    def fno_master(self, underlying: str) -> ContractMaster:
+        """Options and near futures together, for the intraday explorer. V reads contract_master only."""
+        raise DataUnavailable(f"{self.name}: no futures listing")
 
     def probe(self, underlying: str) -> dict:
         """Response shapes for the first-morning check. Values that are prices are not printed."""
@@ -154,6 +159,16 @@ class KiteFnoFeed(FnoFeed):
         except Exception as exc:
             raise DataUnavailable(f"Kite NFO instrument dump failed: {exc}") from exc
         return ContractMaster(from_kite_rows(rows, underlying), self.name, datetime.now(IST))
+
+    def fno_master(self, underlying: str) -> ContractMaster:
+        try:
+            rows = self._kite.instruments("NFO")
+        except Exception as exc:
+            raise DataUnavailable(f"Kite NFO instrument dump failed: {exc}") from exc
+        futs = futures_from_kite_rows(rows, underlying)
+        if not futs:
+            raise DataUnavailable(f"Kite's NFO dump lists no {underlying} futures")
+        return ContractMaster(from_kite_rows(rows, underlying) + futs, self.name, datetime.now(IST))
 
     def _index_key(self, underlying: str) -> str:
         exch, sym = self.INDEX[underlying]
@@ -275,7 +290,7 @@ class GrowwFnoFeed(FnoFeed):
         self._pause = pause_s
         self._index_symbol: dict[str, str] = {}
 
-    def contract_master(self, underlying: str) -> ContractMaster:
+    def _instruments(self):
         """Groww's public instrument CSV, fetched here with a timeout (the SDK's own download has none)."""
         import io
 
@@ -284,10 +299,19 @@ class GrowwFnoFeed(FnoFeed):
         try:
             r = requests.get(self._api.INSTRUMENT_CSV_URL, timeout=60)
             r.raise_for_status()
-            df = pd.read_csv(io.BytesIO(r.content), dtype=str)
+            return pd.read_csv(io.BytesIO(r.content), dtype=str)
         except Exception as exc:
             raise DataUnavailable(f"Groww instrument CSV failed: {exc}") from exc
-        return ContractMaster(from_groww_frame(df, underlying), self.name, datetime.now(IST))
+
+    def contract_master(self, underlying: str) -> ContractMaster:
+        return ContractMaster(from_groww_frame(self._instruments(), underlying), self.name, datetime.now(IST))
+
+    def fno_master(self, underlying: str) -> ContractMaster:
+        df = self._instruments()
+        futs = futures_from_groww_frame(df, underlying)
+        if not futs:
+            raise DataUnavailable(f"Groww's instrument CSV lists no {underlying} futures")
+        return ContractMaster(from_groww_frame(df, underlying) + futs, self.name, datetime.now(IST))
 
     def _quote(self, symbol: str, segment: str) -> dict:
         _time.sleep(self._pause)
@@ -554,6 +578,36 @@ class MockFnoFeed(FnoFeed):
                                              freeze_qty=self.lot * 54))
         return ContractMaster(cs, self.name, now)
 
+    def _monthlies(self, today: date) -> list[date]:
+        """The last expiry weekday of each month, moved back over holidays: three, from this month."""
+        out, y, m = [], today.year, today.month
+        while len(out) < 3:
+            d = (date(y + m // 12, m % 12 + 1, 1) - timedelta(days=1))
+            while d.weekday() != self.expiry_weekday:
+                d -= timedelta(days=1)
+            while not self.cal.is_trading_day(d):
+                d -= timedelta(days=1)
+            if d >= today:
+                out.append(d)
+            y, m = y + m // 12, m % 12 + 1
+        return out
+
+    def fno_master(self, underlying: str) -> ContractMaster:
+        now = self.now_fn()
+        opts = self.contract_master(underlying)
+        listed = set(opts.expiries())
+        cs = list(opts.contracts)
+        for e in self._monthlies(now.date()):
+            cs.append(OptionContract(f"{underlying}{e:%y%b}FUT".upper(), underlying, e, 0.0, "FUT", self.lot, 0.05,
+                                     freeze_qty=self.lot * 27))
+            if e not in listed:            # the monthly options, as on NSE, expire with the future
+                ref = round(self.close_on(now.date() - timedelta(days=1)) / 100) * 100
+                for k in np.arange(ref - 3000, ref + 3001, 100):
+                    for right in ("CE", "PE"):
+                        cs.append(OptionContract(f"{underlying}{e:%y%m%d}{int(k)}{right}", underlying, e, float(k),
+                                                 right, self.lot, 0.05, freeze_qty=self.lot * 27))
+        return ContractMaster(cs, self.name, now)
+
     def index_quote(self, underlying: str) -> IndexQuote:
         now = self.now_fn()
         return IndexQuote(round(self._spot(now), 2), now, now)
@@ -568,8 +622,11 @@ class MockFnoFeed(FnoFeed):
         for c in contracts:
             close_dt = datetime.combine(c.expiry, time(15, 30), IST)
             t = max(0.0, (close_dt - now).total_seconds()) / (365 * 86400)
-            mid = black76(s, c.strike, t, self._vol(s, c.strike), c.right)
-            h = max(0.05, self.half_spread * mid)
+            if c.right == "FUT":
+                mid = s * math.exp(0.065 * t)               # cost of carry at an assumed 6.5%
+            else:
+                mid = black76(s, c.strike, t, self._vol(s, c.strike), c.right)
+            h = max(0.05, (0.00002 if c.right == "FUT" else self.half_spread) * mid)
             bid = math.floor((mid - h) / 0.05) * 0.05
             ask = math.ceil((mid + h) / 0.05) * 0.05
             out[c.symbol] = Quote(c.symbol, round(bid, 2) if bid >= 0.05 else None, round(max(ask, 0.05), 2),
@@ -581,3 +638,38 @@ class MockFnoFeed(FnoFeed):
         if day > now.date() or (day == now.date() and now.time() < time(15, 30)):
             return None
         return round(self.close_on(day), 2)
+
+
+class MockIntradayFeed(MockFnoFeed):
+    """
+    MockFnoFeed with a day inside it: an opening gap, then a seeded Brownian
+    bridge minute by minute to the day's close. SYNTHETIC — for the explorer's
+    tests and demo only; no strategy result on it says anything about a market.
+    """
+
+    def __init__(self, now_fn, intraday_vol: float = 0.007, gap_vol: float = 0.003, **kw):
+        super().__init__(now_fn, **kw)
+        self.intraday_vol, self.gap_vol = intraday_vol, gap_vol
+        self._paths: dict[date, np.ndarray] = {}
+
+    def _path(self, d: date) -> np.ndarray:
+        if d not in self._paths:
+            prev, close = self.close_on(d - timedelta(days=1)), self.close_on(d)
+            rng = np.random.default_rng([self.seed, d.toordinal(), 1])
+            open_ = prev * math.exp(rng.normal(0, self.gap_vol))
+            n = 375
+            w = np.concatenate([[0.0], np.cumsum(rng.normal(0, self.intraday_vol / math.sqrt(n), n))])
+            t = np.linspace(0, 1, n + 1)
+            self._paths[d] = open_ * np.exp(t * math.log(close / open_) + w - t * w[-1])
+        return self._paths[d]
+
+    def _spot(self, now: datetime) -> float:
+        d = now.date()
+        if not self.cal.is_trading_day(d):
+            return self.close_on(d - timedelta(days=1))
+        if now.time() < time(9, 15):
+            return self.close_on(d - timedelta(days=1))
+        x = min(375.0, ((now.hour * 60 + now.minute) - (9 * 60 + 15)) + now.second / 60)
+        path, i = self._path(d), int(x)
+        return float(path[i] if i >= 375 else path[i] + (path[i + 1] - path[i]) * (x - i))
+
