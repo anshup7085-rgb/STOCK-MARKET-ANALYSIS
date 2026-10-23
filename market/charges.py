@@ -37,6 +37,7 @@ this the same as it governs a price.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from decimal import ROUND_HALF_UP, Decimal
 
 
 @dataclass(frozen=True)
@@ -336,7 +337,8 @@ def trade_economics(
 #              futures: the lower of 0.03% or Rs20.
 # Two settlement charges are NOT established by those sources and are taken the
 # way that costs more (research/PREREGISTRATION_3.md, section 9): brokerage on
-# each leg settled in the money, and the SEBI fee on its intrinsic value.
+# each leg settled in the money, and the SEBI fee on its notional value. No
+# exchange charge on settlement is known, and none is applied.
 
 @dataclass(frozen=True)
 class FnoSchedule:
@@ -366,8 +368,16 @@ FNO_ZERODHA = FnoSchedule(name="Zerodha — equity F&O", fut_brokerage_pct=0.03)
 FNO_SCHEDULES = {"groww": FNO_GROWW, "kite": FNO_ZERODHA, "zerodha": FNO_ZERODHA}
 
 
+def _paise(x: float) -> float:
+    """Half-up to Rs0.01, the rounding PREREGISTRATION_3 section 8 fixes for each charge."""
+    return float(Decimal(repr(x)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+
+
 def _gst(b: CostBreakdown, sched: FnoSchedule) -> CostBreakdown:
+    """GST on brokerage + transaction charge + SEBI fee; then every charge to the paisa, half-up."""
     b.gst = (b.brokerage + b.exchange_txn + b.sebi) * sched.gst_pct / 100.0
+    for f in ("brokerage", "stt", "exchange_txn", "sebi", "stamp_duty", "gst"):
+        setattr(b, f, _paise(getattr(b, f)))
     return b
 
 
@@ -388,23 +398,23 @@ def option_order_costs(premium: float, qty: int, side: str, sched: FnoSchedule) 
     return _gst(b, sched)
 
 
-def option_settlement_costs(intrinsic: float, qty: int, long: bool, sched: FnoSchedule) -> CostBreakdown:
+def option_settlement_costs(intrinsic: float, qty: int, long: bool, sched: FnoSchedule,
+                            notional_price: float | None = None) -> CostBreakdown:
     """
     A cash-settled option at expiry. Out of the money (intrinsic 0) costs nothing.
     In the money: STT on intrinsic value for the holder only, plus the two
-    conservative readings (brokerage per leg, SEBI fee on intrinsic value).
+    conservative readings: brokerage per leg, and the SEBI fee on the leg's
+    notional value (`notional_price` x qty: PREREGISTRATION_3 uses max(P, K)).
     """
     if qty <= 0 or intrinsic <= 0:
         return CostBreakdown()
-    value = intrinsic * qty
+    basis = (notional_price if notional_price is not None else intrinsic) * qty
     b = CostBreakdown(
         brokerage=sched.brokerage_per_order if sched.settlement_brokerage else 0.0,
-        stt=value * sched.opt_stt_exercise_pct / 100.0 if long else 0.0,
-        sebi=value * sched.sebi_pct / 100.0 if sched.settlement_sebi else 0.0,
+        stt=intrinsic * qty * sched.opt_stt_exercise_pct / 100.0 if long else 0.0,
+        sebi=basis * sched.sebi_pct / 100.0 if sched.settlement_sebi else 0.0,
     )
     return _gst(b, sched)
-
-
 def futures_order_costs(price: float, qty: int, side: str, sched: FnoSchedule) -> CostBreakdown:
     """One executed futures order of `qty` units at `price`."""
     if qty <= 0:

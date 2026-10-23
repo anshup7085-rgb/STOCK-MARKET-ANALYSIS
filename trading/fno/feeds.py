@@ -240,7 +240,9 @@ class GrowwFnoFeed(FnoFeed):
     _BIDQ = ("bid_quantity", "bidQuantity", "best_bid_quantity")
     _ASKQ = ("offer_quantity", "ask_quantity", "offerQuantity", "askQuantity", "best_ask_quantity")
     _LTP = ("last_price", "ltp", "lastPrice")
-    _TS = ("exchange_timestamp", "last_trade_time", "timestamp", "lastTradeTime")
+    # A quote's own timestamp only: a last-trade time dates the last trade, not the
+    # quote, and is never used for freshness (PREREGISTRATION_3 section 7).
+    _TS = ("exchange_timestamp", "quote_timestamp", "timestamp")
 
     def __init__(self, pause_s: float = 0.15):
         refuse_secrets_in_env()
@@ -335,6 +337,65 @@ class GrowwFnoFeed(FnoFeed):
         return out
 
 
+# -- NSE's final settlement price ------------------------------------------------
+
+BHAVCOPY_URL = "https://nsearchives.nseindia.com/content/fo/BhavCopy_NSE_FO_0_0_0_{d:%Y%m%d}_F_0000.csv.zip"
+_BHAV_COLS = ("TckrSymb", "FinInstrmTp", "XpryDt", "StrkPric", "OptnTp", "SttlmPric")
+
+
+def fsp_from_bhavcopy(rows, underlying: str, expiry: date) -> tuple[float | None, dict]:
+    """
+    The final settlement price implied by NSE's settlement prices for the
+    expiring index options: K + S for an in-the-money call, K - S for a put.
+    They must agree to the paisa, from at least four contracts; otherwise None.
+    No column of NSE's file is assumed: a missing one is reported by name.
+    """
+    import pandas as pd
+    df = rows if isinstance(rows, pd.DataFrame) else pd.DataFrame(rows)
+    missing = [c for c in _BHAV_COLS if c not in df.columns]
+    if missing:
+        return None, {"error": f"bhavcopy lacks {missing}", "columns": list(df.columns)[:40]}
+    exp = pd.to_datetime(df["XpryDt"], errors="coerce").dt.date
+    sel = df.loc[(df["TckrSymb"].astype(str).str.upper() == underlying)
+                 & (df["FinInstrmTp"].astype(str).str.upper() == "IDO") & (exp == expiry)]
+    vals = []
+    for r in sel.to_dict("records"):
+        try:
+            k, sp = float(r["StrkPric"]), float(r["SttlmPric"])
+        except (TypeError, ValueError):
+            continue
+        if sp > 0:
+            vals.append(k + sp if str(r["OptnTp"]).upper() == "CE" else k - sp)
+    if len(vals) < 4:
+        return None, {"error": f"{len(vals)} in-the-money settlement prices for {underlying} {expiry}", "rows": len(sel)}
+    vals.sort()
+    if round(vals[-1] - vals[0], 2) > 0.01:
+        return None, {"error": f"implied values disagree: {vals[0]:.2f} to {vals[-1]:.2f}", "n": len(vals)}
+    return round(vals[len(vals) // 2], 2), {"n": len(vals), "spread": round(vals[-1] - vals[0], 4)}
+
+
+def nse_fsp(underlying: str, expiry: date, timeout: int = 20) -> tuple[float | None, dict]:
+    """Read NSE's F&O bhavcopy for the expiry date and derive the final settlement price."""
+    import io
+    import urllib.request
+    import zipfile
+
+    import pandas as pd
+    url = BHAVCOPY_URL.format(d=expiry)
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0", "Accept": "*/*"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            blob = r.read()
+        with zipfile.ZipFile(io.BytesIO(blob)) as z:
+            name = next(n for n in z.namelist() if n.lower().endswith(".csv"))
+            df = pd.read_csv(z.open(name), dtype=str)
+    except Exception as exc:
+        return None, {"url": url, "error": f"{type(exc).__name__}: {str(exc)[:200]}"}
+    v, info = fsp_from_bhavcopy(df, underlying, expiry)
+    info["url"] = url
+    return v, info
+
+
 # -- Synthetic, for tests and the wiring demo only -----------------------------
 
 def _ncdf(x: float) -> float:
@@ -373,6 +434,7 @@ class MockFnoFeed(FnoFeed):
         self.expiry_weekday = expiry_weekday
         self._closes: dict[date, float] = {}
         self.closes_override: dict[date, float] = {}
+        self.expiry_moves: dict[date, date] = {}      # original -> moved; symbols keep the original date
 
     def _ret(self, d: date) -> float:
         return float(np.random.default_rng([self.seed, d.toordinal()]).normal(0, self.daily_vol))
@@ -401,7 +463,7 @@ class MockFnoFeed(FnoFeed):
 
     def _expiries(self, today: date) -> list[date]:
         out, d = [], today
-        while len(out) < 4:
+        while len(out) < 5:
             if d.weekday() == self.expiry_weekday:
                 e = d
                 while not self.cal.is_trading_day(e):
@@ -415,11 +477,14 @@ class MockFnoFeed(FnoFeed):
         now = self.now_fn()
         ref = round(self.close_on(now.date() - timedelta(days=1)) / 50) * 50
         cs = []
-        for e in self._expiries(now.date()):
+        for e in self._expiries(now.date() - timedelta(days=7)):
+            moved = self.expiry_moves.get(e, e)
+            if moved < now.date():
+                continue
             for k in np.arange(ref - 3000, ref + 3001, 50):
                 for right in ("CE", "PE"):
                     sym = f"{underlying}{e:%y%m%d}{int(k)}{right}"
-                    cs.append(OptionContract(sym, underlying, e, float(k), right, self.lot, 0.05,
+                    cs.append(OptionContract(sym, underlying, moved, float(k), right, self.lot, 0.05,
                                              freeze_qty=self.lot * 54))
         return ContractMaster(cs, self.name, now)
 

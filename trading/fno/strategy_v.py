@@ -3,7 +3,8 @@ Strategy V, exactly as research/PREREGISTRATION_3.md writes it. Pure functions:
 no feed, no clock, no file. The engine supplies quotes and time.
 
 Section numbers in comments refer to that document. A number here that differs
-from the document is a bug in this file, not a choice.
+from the document is a bug in this file, not a choice. Where the document is
+silent, this file at the binding commit is the rule (section 17).
 """
 
 from __future__ import annotations
@@ -16,34 +17,51 @@ from market.calendar import TradingCalendar
 from market.charges import FnoSchedule, option_order_costs, option_settlement_costs
 from trading.fno.model import ContractMaster, IndexQuote, OptionContract, Quote
 
+# SHA-256 of research/PREREGISTRATION_3.md at the binding commit. The engine
+# refuses a real feed unless the file on disk matches it (section 17).
+REGISTRATION_SHA256 = None
+
 
 @dataclass(frozen=True)
 class VParams:
     underlying: str = "NIFTY"
-    wing: float = 100.0                     # W, index points (6)
-    min_credit_frac: float = 0.20           # C >= 0.20 W (8)
-    risk_frac: float = 0.01                 # M(n) <= 1% of equity (8)
-    max_lots: int = 10                      # (8)
-    entry_start: time = time(10, 0)         # (5)
-    entry_end: time = time(14, 0)           # (5)
-    min_sessions_to_expiry: int = 3         # sessions in (d, E] (4)
-    spread_abs: float = 1.00                # ask - bid <= max(1.00, 0.10 mid) (7)
+    starting_equity: float = 500_000.0     # fixed (Summary)
+    risk_budget: float = 5_000.0           # B: 1% of the starting equity, fixed (8)
+    wing: float = 100.0                    # W, index points (6)
+    min_credit: float = 20.00              # C >= 0.20 W (8)
+    max_credit: float = 80.00              # C <= 0.80 W, else bad data (8)
+    max_lots: int = 10                     # (8)
+    first_slot: time = time(10, 0)         # 17 slots, 10:00 ... 14:00 (5)
+    slot_every_min: int = 15
+    slots: int = 17
+    slot_window_s: int = 120               # a pass belongs to slot t if it starts in [t, t + 120 s) (5)
+    min_sessions_to_expiry: int = 3        # sessions in (d, E] (4)
+    spread_abs: float = 1.00               # ask - bid <= max(1.00, 0.10 mid) (7)
     spread_frac: float = 0.10
-    max_quote_age_s: float = 120.0          # (7)
-    harm_stop_frac: float = 0.10            # (11)
-    settle_after: time = time(16, 0)        # (3)
-    cross_check_tol: float = 0.0005         # 0.05% between the two closes (3)
-    second_source_wait: int = 3             # trading days, then the feed's value alone (3)
-    worst_case_after: int = 10              # trading days, then settle at -M (3)
-    futility_n: int = 60                    # (12)
-    max_trades: int = 250                   # (12)
-    threshold: float = 200.0                # K >= 1/alpha, alpha = 0.005 (12)
+    max_quote_age_s: int = 120             # (7)
+    max_snapshot_s: int = 10               # every option quote read within 10 s after S (7)
+    harm_stop: float = 50_000.0            # 10% of the starting equity (11)
+    settle_after: time = time(16, 0)       # (3)
+    close_rule_until: date = date(2026, 12, 7)   # expiries before this: FSP is the close (3)
+    close_match_points: float = 0.10       # (3)
+    fsp_sanity_frac: float = 0.03          # (3)
+    worst_case_after: int = 10             # trading days, then settle at -M (3)
+    futility_n: int = 60                   # (12)
+    max_trades: int = 250                  # (12)
+    max_cycles: int = 300                  # (12)
+    abandon_after_days: int = 21           # (12)
+    threshold: float = 200.0               # K >= 1/alpha, alpha = 0.005 (12)
 
 
 REGISTERED = VParams()
 
 ROLES = (("short_call", "CE", "SELL"), ("short_put", "PE", "SELL"),
          ("long_call", "CE", "BUY"), ("long_put", "PE", "BUY"))
+
+
+def milli(x: float) -> int:
+    """Exact decimal comparison for prices on a 0.05 tick: everything is a multiple of 0.005 (8)."""
+    return round(x * 1000)
 
 
 @dataclass
@@ -70,7 +88,6 @@ class Plan:
     entry_costs_total: float
     settlement_allowance: float
     max_loss: float
-    equity_for_sizing: float
     budget: float
     flags: list[str]
 
@@ -80,7 +97,7 @@ class Plan:
         return d
 
 
-# -- calendar (4) ------------------------------------------------------------
+# -- calendar and slots (4, 5) -------------------------------------------------
 
 def sessions_after(d: date, e: date, cal: TradingCalendar) -> int:
     """Trading sessions in (d, e], counting e."""
@@ -91,33 +108,48 @@ def sessions_after(d: date, e: date, cal: TradingCalendar) -> int:
     return n
 
 
-def ineligible(today: date, expiry: date, cal: TradingCalendar, p: VParams = REGISTERED) -> str | None:
-    if today >= expiry:
-        return "expiry day"
-    left = sessions_after(today, expiry, cal)
-    if left < p.min_sessions_to_expiry:
-        return f"{left} session(s) to expiry, {p.min_sessions_to_expiry} needed"
+def eligible_sessions(e: date, e_prev: date, cal: TradingCalendar, p: VParams = REGISTERED) -> list[date]:
+    """Sessions d with E_prev < d < E and at least 3 sessions in (d, E] (4)."""
+    out, d = [], e_prev + timedelta(days=1)
+    while d < e:
+        if cal.is_trading_day(d) and sessions_after(d, e, cal) >= p.min_sessions_to_expiry:
+            out.append(d)
+        d += timedelta(days=1)
+    return out
+
+
+def slot_times(p: VParams = REGISTERED) -> list[time]:
+    base = datetime.combine(date(2000, 1, 1), p.first_slot)
+    return [(base + timedelta(minutes=p.slot_every_min * k)).time() for k in range(p.slots)]
+
+
+def slot_of(now: datetime, p: VParams = REGISTERED) -> time | None:
+    """The slot a pass starting at `now` belongs to, or None (5)."""
+    for t in slot_times(p):
+        start = datetime.combine(now.date(), t, now.tzinfo)
+        if start <= now < start + timedelta(seconds=p.slot_window_s):
+            return t
     return None
 
 
-def in_entry_window(now: datetime, p: VParams = REGISTERED) -> bool:
-    return p.entry_start <= now.time().replace(tzinfo=None) <= p.entry_end
+def expected_slots(e: date, e_prev: date, cal: TradingCalendar, tz, p: VParams = REGISTERED) -> list[datetime]:
+    return [datetime.combine(d, t, tz) for d in eligible_sessions(e, e_prev, cal, p) for t in slot_times(p)]
 
 
 # -- quotes (7) --------------------------------------------------------------
 
-def quote_problem(q: Quote | None, now: datetime, p: VParams = REGISTERED) -> str | None:
+def quote_problem(q: Quote | None, at: datetime, p: VParams = REGISTERED) -> str | None:
     if q is None:
         return "no quote"
     if q.bid is None or q.bid <= 0:
         return "no bid"
-    if q.ask is None or q.ask <= q.bid:
+    if q.ask is None or milli(q.ask) <= milli(q.bid):
         return "ask not above bid"
-    mid = (q.bid + q.ask) / 2
-    if q.ask - q.bid > max(p.spread_abs, p.spread_frac * mid) + 1e-9:
-        return f"spread {q.ask - q.bid:.2f} wider than max({p.spread_abs:.2f}, {p.spread_frac:.0%} of mid {mid:.2f})"
-    if q.exchange_ts is not None and (now - q.exchange_ts).total_seconds() > p.max_quote_age_s:
-        return f"quote {int((now - q.exchange_ts).total_seconds())}s old"
+    spread, mid = milli(q.ask) - milli(q.bid), (milli(q.ask) + milli(q.bid)) / 2
+    if spread > max(milli(p.spread_abs), p.spread_frac * mid):
+        return f"spread {q.ask - q.bid:.2f} wider than max({p.spread_abs:.2f}, {p.spread_frac:.0%} of mid {mid / 1000:.3f})"
+    if q.exchange_ts is not None and (at - q.exchange_ts).total_seconds() > p.max_quote_age_s:
+        return f"quote {int((at - q.exchange_ts).total_seconds())}s old"
     return None
 
 
@@ -128,71 +160,82 @@ def touch_problem(q: Quote, side: str, qty: int) -> str | None:
     return None
 
 
+# -- settlement arithmetic (8, 10) ------------------------------------------------
+
 def intrinsic(right: str, strike: float, value: float) -> float:
     return max(0.0, value - strike) if right == "CE" else max(0.0, strike - value)
 
 
-# -- size (8) ----------------------------------------------------------------
-
-def leg_costs(legs: list[dict], qty: int, sched: FnoSchedule) -> dict[str, dict]:
-    return {leg["role"]: option_order_costs(leg["price"], qty, leg["side"], sched).as_dict() for leg in legs}
+def settlement_costs(legs: list[dict], qty: int, value: float, sched: FnoSchedule) -> dict[str, dict]:
+    return {g["role"]: option_settlement_costs(intrinsic(g["right"], g["strike"], value), qty,
+                                               long=g["side"] == "BUY", sched=sched,
+                                               notional_price=max(value, g["strike"])).as_dict()
+            for g in legs}
 
 
 def settlement_allowance(legs: list[dict], qty: int, p: VParams, sched: FnoSchedule) -> float:
     """
-    Settlement costs if the index settles exactly W beyond a long strike, the worse
-    side: what the fee card charges there (STT on the long leg, and the two
-    conservative readings on both in-the-money legs). Inside that zone the costs
-    are no higher, so R >= -1 there exactly.
+    The section 9 settlement costs with the index exactly W beyond a long strike,
+    on whichever side they are larger. Inside that zone costs are no higher, so
+    R >= -1 there exactly (8).
     """
     strike = {g["role"]: g["strike"] for g in legs}
-    worst = 0.0
-    for value in (strike["long_call"] + p.wing, strike["long_put"] - p.wing):
-        worst = max(worst, sum(option_settlement_costs(intrinsic(g["right"], g["strike"], value), qty,
-                                                       long=g["side"] == "BUY", sched=sched).as_dict()["total"]
-                               for g in legs))
-    return worst
+    return max(round(sum(c["total"] for c in settlement_costs(legs, qty, v, sched).values()), 2)
+               for v in (strike["long_call"] + p.wing, strike["long_put"] - p.wing))
 
 
 def max_loss(credit: float, legs: list[dict], lot_size: int, lots: int, entry_costs_total: float,
              p: VParams, sched: FnoSchedule) -> float:
-    return ((p.wing - credit) * lot_size * lots + entry_costs_total
-            + settlement_allowance(legs, lot_size * lots, p, sched))
+    return round((p.wing - credit) * lot_size * lots + entry_costs_total
+                 + settlement_allowance(legs, lot_size * lots, p, sched), 2)
+
+
+def leg_costs(legs: list[dict], qty: int, sched: FnoSchedule) -> dict[str, dict]:
+    return {g["role"]: option_order_costs(g["price"], qty, g["side"], sched).as_dict() for g in legs}
 
 
 # -- entry (6-8) -------------------------------------------------------------
 
 def plan_entry(master: ContractMaster, expiry: date, index: IndexQuote,
                fetch: Callable[[list[OptionContract]], dict[str, Quote]],
-               now: datetime, equity_for_sizing: float,
-               sched: FnoSchedule, p: VParams = REGISTERED) -> Plan | Skip:
+               sched: FnoSchedule, p: VParams = REGISTERED,
+               snapshot: dict | None = None) -> Plan | Skip:
+    """
+    `index` is read first; its fetch time is the pass time T (7). `snapshot`, if
+    given, collects every quote read, so the journal can replay the pass (17).
+    """
+    snap = snapshot if snapshot is not None else {}
+    snap["index"] = index.as_dict()
+    t = index.fetched_at
     flags: list[str] = []
     if index.exchange_ts is None:
         flags.append("index value has no exchange timestamp; fetch time used")
-    elif (now - index.exchange_ts).total_seconds() > p.max_quote_age_s:
-        return Skip("index_stale", f"index value {int((now - index.exchange_ts).total_seconds())}s old")
-    s = index.value
+    elif (t - index.exchange_ts).total_seconds() > p.max_quote_age_s:
+        return Skip("index_stale", f"index value {int((t - index.exchange_ts).total_seconds())}s old")
+    s = round(index.value, 2)
 
     both = sorted(set(master.strikes(expiry, "CE")) & set(master.strikes(expiry, "PE")))
     if not both:
         return Skip("no_strikes", f"no strike for {expiry} lists both a call and a put")
-    k_atm = min(both, key=lambda k: (abs(k - s), k))            # tie -> the lower strike
+    k_atm = min(both, key=lambda k: (abs(milli(k) - milli(s)), k))      # tie -> the lower strike
     atm = [master.get(expiry, k_atm, "CE"), master.get(expiry, k_atm, "PE")]
     quotes = fetch(atm)
+    snap["atm"] = {c.symbol: (quotes[c.symbol].as_dict() if c.symbol in quotes else None) for c in atm}
     atm_q = {}
     for c in atm:
         q = quotes.get(c.symbol)
-        why = quote_problem(q, now, p)
+        why = quote_problem(q, t, p)
         if why:
-            return Skip("atm_quote", f"{c.symbol}: {why}", {"quote": q.as_dict() if q else None})
+            return Skip("atm_quote", f"{c.symbol}: {why}")
         atm_q[c.right] = q
-    em = atm_q["CE"].mid + atm_q["PE"].mid
+    em_m = (milli(atm_q["CE"].bid) + milli(atm_q["CE"].ask) + milli(atm_q["PE"].bid) + milli(atm_q["PE"].ask)) / 2
+    em = em_m / 1000
 
     calls, puts = master.strikes(expiry, "CE"), master.strikes(expiry, "PE")
-    up = [k for k in calls if k >= s + em]
-    down = [k for k in puts if k <= s - em]
+    up = [k for k in calls if milli(k) >= milli(s) + em_m]
+    down = [k for k in puts if milli(k) <= milli(s) - em_m]
     if not up or not down:
-        return Skip("short_not_listed", f"no listed strike beyond S +- EM ({s:.2f} +- {em:.2f})")
+        return Skip("short_not_listed", f"no listed strike beyond S +- EM ({s:.2f} +- {em:.3f})")
     strikes = {"short_call": up[0], "short_put": down[-1],
                "long_call": up[0] + p.wing, "long_put": down[-1] - p.wing}
     contracts = {}
@@ -207,58 +250,61 @@ def plan_entry(master: ContractMaster, expiry: date, index: IndexQuote,
     q_lot = lots_seen.pop()
 
     quotes = fetch(list(contracts.values()))
+    snap["legs"] = {r: (quotes[c.symbol].as_dict() if c.symbol in quotes else None) for r, c in contracts.items()}
     leg_q = {}
     for role, _, _ in ROLES:
         q = quotes.get(contracts[role].symbol)
-        why = quote_problem(q, now, p)
+        why = quote_problem(q, t, p)
         if why:
-            return Skip("leg_quote", f"{role} {contracts[role].symbol}: {why}",
-                        {"quote": q.as_dict() if q else None})
+            return Skip("leg_quote", f"{role} {contracts[role].symbol}: {why}")
         leg_q[role] = q
-    if any(q.exchange_ts is None for q in list(leg_q.values()) + list(atm_q.values())):
+    every = list(leg_q.values()) + list(atm_q.values())
+    if max(q.fetched_at for q in every) > t + timedelta(seconds=p.max_snapshot_s):
+        return Skip("slow_snapshot", f"option quotes read more than {p.max_snapshot_s}s after the index value")
+    stamps = [q.exchange_ts for q in every] + [index.exchange_ts]
+    if not any(ts is not None and ts.date() == t.date() for ts in stamps):
+        return Skip("no_timestamp_today", "neither the index nor any option quote carries an exchange timestamp dated today")
+    if any(q.exchange_ts is None for q in every):
         flags.append("an option quote has no exchange timestamp; fetch time used")
 
-    credit = (leg_q["short_call"].bid + leg_q["short_put"].bid
-              - leg_q["long_call"].ask - leg_q["long_put"].ask)
-    if credit >= p.wing:
-        return Skip("credit_not_below_wing", f"credit {credit:.2f} >= wing {p.wing:g}: bad data",
-                    {"quotes": {r: q.as_dict() for r, q in leg_q.items()}})
-    if credit < p.min_credit_frac * p.wing - 1e-9:
-        return Skip("credit_below_floor", f"credit {credit:.2f} < {p.min_credit_frac * p.wing:.2f}",
-                    {"credit": round(credit, 4)})
+    credit_m = milli(leg_q["short_call"].bid) + milli(leg_q["short_put"].bid) \
+        - milli(leg_q["long_call"].ask) - milli(leg_q["long_put"].ask)
+    credit = credit_m / 1000
+    if credit_m > milli(p.max_credit):
+        return Skip("credit_above_cap", f"credit {credit:.2f} > {p.max_credit:.2f}: bad data")
+    if credit_m < milli(p.min_credit):
+        return Skip("credit_below_floor", f"credit {credit:.2f} < {p.min_credit:.2f}", {"credit": credit})
 
     legs = [{
         "role": role, "symbol": contracts[role].symbol, "exchange": contracts[role].exchange,
-        "strike": contracts[role].strike, "right": right,
-        "side": side, "price": leg_q[role].bid if side == "SELL" else leg_q[role].ask,
-        "mid": leg_q[role].mid, "quote": leg_q[role].as_dict(),
+        "strike": contracts[role].strike, "right": right, "side": side,
+        "price": leg_q[role].bid if side == "SELL" else leg_q[role].ask,
+        "mid": (milli(leg_q[role].bid) + milli(leg_q[role].ask)) / 2000,
     } for role, right, side in ROLES]
 
-    budget = p.risk_frac * equity_for_sizing
     freeze = [c.freeze_qty for c in contracts.values() if c.freeze_qty]
     chosen = None
     for n in range(p.max_lots, 0, -1):
         if freeze and n * q_lot > min(freeze):
             continue
         costs = leg_costs(legs, n * q_lot, sched)
-        total = sum(c["total"] for c in costs.values())
+        total = round(sum(c["total"] for c in costs.values()), 2)
         m = max_loss(credit, legs, q_lot, n, total, p, sched)
-        if m <= budget:
+        if m <= p.risk_budget:
             chosen = (n, costs, total, m)
             break
     if chosen is None:
         costs1 = leg_costs(legs, q_lot, sched)
-        m1 = max_loss(credit, legs, q_lot, 1, sum(c["total"] for c in costs1.values()), p, sched)
-        return Skip("zero_lots", f"1 lot needs Rs{m1:,.2f} of maximum loss; the budget is Rs{budget:,.2f}",
-                    {"max_loss_1_lot": round(m1, 2), "budget": round(budget, 2), "credit": round(credit, 4),
-                     "lot_size": q_lot})
+        m1 = max_loss(credit, legs, q_lot, 1, round(sum(c["total"] for c in costs1.values()), 2), p, sched)
+        return Skip("zero_lots", f"1 lot needs Rs{m1:,.2f} of maximum loss; the budget is Rs{p.risk_budget:,.2f}",
+                    {"max_loss_1_lot": m1, "budget": p.risk_budget, "credit": credit, "lot_size": q_lot})
     n, costs, total, m = chosen
 
-    for leg in legs:
-        why = touch_problem(leg_q[leg["role"]], leg["side"], n * q_lot)
+    for g in legs:
+        why = touch_problem(leg_q[g["role"]], g["side"], n * q_lot)
         if why:
-            return Skip("touch_size", f"{leg['role']}: {why}")
-    if any((leg_q[r].bid_qty if s == "SELL" else leg_q[r].ask_qty) is None for r, _, s in ROLES):
+            return Skip("touch_size", f"{g['role']}: {why}")
+    if any((leg_q[r].bid_qty if sd == "SELL" else leg_q[r].ask_qty) is None for r, _, sd in ROLES):
         flags.append("touch size unknown")
 
     return Plan(
@@ -266,49 +312,25 @@ def plan_entry(master: ContractMaster, expiry: date, index: IndexQuote,
         atm_quotes={r: q.as_dict() for r, q in atm_q.items()}, expected_move=em, legs=legs,
         credit=credit, lot_size=q_lot, lots=n, qty=n * q_lot, entry_costs=costs,
         entry_costs_total=total, settlement_allowance=settlement_allowance(legs, n * q_lot, p, sched),
-        max_loss=m, equity_for_sizing=equity_for_sizing, budget=budget, flags=flags,
+        max_loss=m, budget=p.risk_budget, flags=flags,
     )
 
 
-# -- settlement and flatten (10) ---------------------------------------------
+# -- settlement (10) ---------------------------------------------------------
 
 def settle(trade: dict, value: float, sched: FnoSchedule) -> dict:
-    """Cash settlement at the official close `value`. `trade` is a book record."""
+    """Cash settlement at the final settlement price `value`. `trade` is a book record."""
     qty = trade["qty"]
-    legs, gross_pts, costs = [], trade["credit"], {}
-    for leg in trade["legs"]:
-        i = intrinsic(leg["right"], leg["strike"], value)
-        gross_pts += i if leg["side"] == "BUY" else -i
-        c = option_settlement_costs(i, qty, long=leg["side"] == "BUY", sched=sched).as_dict()
-        costs[leg["role"]] = c
-        legs.append({"role": leg["role"], "intrinsic": i})
-    gross = gross_pts * qty
-    settle_total = sum(c["total"] for c in costs.values())
-    net = gross - trade["entry_costs_total"] - settle_total
-    return {"value": value, "legs": legs, "gross_points": gross_pts, "gross": gross,
+    gross_pts = trade["credit"]
+    legs = []
+    for g in trade["legs"]:
+        i = intrinsic(g["right"], g["strike"], value)
+        gross_pts += i if g["side"] == "BUY" else -i
+        legs.append({"role": g["role"], "intrinsic": i})
+    costs = settlement_costs(trade["legs"], qty, value, sched)
+    gross = round(gross_pts * qty, 2)
+    settle_total = round(sum(c["total"] for c in costs.values()), 2)
+    net = round(gross - trade["entry_costs_total"] - settle_total, 2)
+    return {"value": value, "legs": legs, "gross_points": round(gross_pts, 3), "gross": gross,
             "settlement_costs": costs, "settlement_costs_total": settle_total,
             "net": net, "R": net / trade["max_loss"]}
-
-
-def flatten_fill(trade: dict, quotes: dict[str, Quote], now: datetime, sched: FnoSchedule,
-                 p: VParams = REGISTERED) -> dict | Skip:
-    """Close every leg at the touch: shorts bought at the ask, longs sold at the bid."""
-    exits, debit = [], 0.0
-    for leg in trade["legs"]:
-        q = quotes.get(leg["symbol"])
-        why = quote_problem(q, now, p)
-        if why:
-            return Skip("flatten_quote", f"{leg['role']} {leg['symbol']}: {why}")
-        price = q.ask if leg["side"] == "SELL" else q.bid
-        debit += price if leg["side"] == "SELL" else -price
-        exits.append({"role": leg["role"], "side": "BUY" if leg["side"] == "SELL" else "SELL",
-                      "price": price, "quote": q.as_dict()})
-    if debit > p.wing:
-        return Skip("flatten_debit", f"closing debit {debit:.2f} exceeds the wing {p.wing:g}: quotes are not sane")
-    qty = trade["qty"]
-    costs = {e["role"]: option_order_costs(e["price"], qty, e["side"], sched).as_dict() for e in exits}
-    exit_total = sum(c["total"] for c in costs.values())
-    gross = (trade["credit"] - debit) * qty
-    net = gross - trade["entry_costs_total"] - exit_total
-    return {"exits": exits, "debit": debit, "gross": gross, "exit_costs": costs,
-            "exit_costs_total": exit_total, "net": net, "R": net / trade["max_loss"]}

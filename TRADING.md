@@ -286,39 +286,42 @@ journal) and gives a forward read on the score, not a strategy worth money.
 ## F&O paper trading — strategy V
 
 A separate, **paper-only** engine in `trading/fno/` trades one pre-registered
-idea: a defined-risk NIFTY weekly iron condor
-(`research/PREREGISTRATION_3.md`).
+idea: a defined-risk NIFTY weekly iron condor (`research/PREREGISTRATION_3.md`).
 
 - **What it trades.** Each week it sells a call and a put about one
-  straddle-width from the index and buys protection 100 points beyond each.
-  It holds to expiry and settles at the official close.
-- **Risk.** The most a trade can lose is fixed when it opens, and it is never
-  more than 1% of paper equity.
-- **What it is not.** It places no order anywhere. There is no `--mode`; it
-  cannot go live.
+  straddle-width from the index and buys protection 100 points beyond each. It
+  holds the position to expiry and settles it at NSE's final settlement price.
+- **Size.** Paper capital is fixed at ₹5,00,000 and the risk budget at ₹5,000 a
+  trade. The most a trade can lose is fixed when it opens.
+- **What it is not.** It places no order anywhere. There is no `--mode`, no
+  operator exit, and no way to go live.
+- **Not yet active.** The engine refuses any real feed until the registration
+  binds (its draft notice is removed and its hash recorded in code).
 
 **What you need**
 
 | Item | Why |
 |---|---|
-| A market-data plan: **Kite Connect** (Zerodha, paid Connect plan) or the **Groww trading API** (paid plan) | Live option quotes with bid and ask. Yahoo has no option data. Both plans were listed at about Rs500 a month when last checked; check the current price before you pay |
-| A machine that stays on 09:45–17:00 IST on trading days | A small VPS or your own computer. Paper needs **no static IP**: the static-IP rule covers orders, and this sends none |
-| Two minutes each trading morning | Mint the day's access token by hand (`python tools/kite_session.py` for Zerodha), export it, start the runner |
+| A market-data plan: **Kite Connect** (Zerodha, paid Connect plan) or the **Groww trading API** (paid plan) | Live option quotes with bid, ask and depth. Yahoo has no option data. Both were listed at about Rs500 a month when last checked; check the current price before you pay. Kite's quotes carry depth and a quote timestamp; Groww's quote format is not yet confirmed |
+| A machine that is on from 09:45 to 17:15 IST on trading days | A small VPS or your own computer. Zerodha says read-only API calls need no static IP; for Groww, check |
+| Two minutes each trading morning, **before 10:00** | Mint the day's access token by hand (`python tools/kite_session.py` for Zerodha), export it, start the runner |
 | `pip install kiteconnect` or `pip install growwapi` | The feed's SDK |
 
 **First morning**
 
 ```bash
-python run_trader.py fno probe --feed kite      # or --feed groww; prints response shapes, no prices
-python run_trader.py fno init  --feed kite --equity 500000
+python run_trader.py fno probe --feed kite      # response shapes (no prices), NSE settlement file reachability
+python run_trader.py fno init  --feed kite      # probes quotes, then starts the one paper book
 ```
 
-Send the `probe` output for review before the first entry day. It shows
-whether the lot size, strike interval and expiry weekday match what V expects.
-It also shows whether quotes carry depth and timestamps. **None of those facts
-is hard-coded.**
+Send the `probe` output for review. It shows:
 
-**Every trading morning**
+- whether the lot size, strike interval and expiry weekday match what V
+  expects (none of them is hard-coded);
+- whether quotes carry depth and a timestamp;
+- whether NSE's settlement file is reachable from your machine.
+
+**Every trading morning, before 10:00**
 
 ```bash
 export KITE_API_KEY=... KITE_ACCESS_TOKEN=...   # minted by hand today
@@ -327,32 +330,42 @@ tmux new -s fno 'python run_trader.py fno run --feed kite'
 
 The runner:
 
-- makes a pass now, then one every 15 minutes from 10:00 to 14:00;
-- makes settlement passes at 16:00, 16:30 and 17:00;
-- exits after the last pass.
+- makes a settlement pass at start;
+- makes one entry pass at each of the 17 slots, 10:00 to 14:00 every 15
+  minutes;
+- makes settlement passes at 16:00, 16:30 and 17:00, then exits.
 
-A day it does not run is visible in the journal as a day with no runner.
+**A slot it misses on an eligible day makes that week count as a full loss in
+the test.** For a Tuesday expiry, the eligible days are the Wednesday and
+Thursday before it. This rule is deliberate: without it, skipping weeks that
+look dangerous could flatter the result.
 
 **Commands**
 
 | Command | Does |
 |---|---|
-| `fno status` | Paper equity, every trade and its legs, journal integrity |
+| `fno status` | Every trade and its legs, missed weeks, the verdict if reached, journal integrity |
 | `fno evaluate [--json F]` | The registered statistic and verdict, plus the descriptive record, from the journal alone |
 | `fno verify` | Re-hash the journal chain |
-| `fno flatten --feed F --reason R` | Close the open trade at the touch. It is off-rule and **still counts** |
-| `fno settle --expiry D --value V --source S` | Enter NSE's published close when the two sources disagree |
+| `fno pass --feed F` | One settlement-only pass now (entries happen only in the runner's slots) |
+| `fno settle --expiry D --value V --source URL` | Enter NSE's published settlement price by hand, only after an automatic attempt on a later trading day failed; the URL must be NSE's |
+| `fno switch-feed --feed F --reason R --failed-sessions D1 D2` | Move the book to the other feed, only after the bound one failed every slot of two eligible days |
 | `fno demo` | Synthetic wiring check in a temp directory. Never touches the paper book |
-| `kill --reason R` | Blocks new F&O entries too: `state/KILL` is global |
+| `kill --reason R` | For faults or absence only. It blocks entries, and a blocked week counts as missed |
 
-**What to expect.** About 50 trades a year. Each trade earns a small credit
-most weeks and occasionally loses up to its fixed maximum.
+**What to expect.** At most about 50 trades a year, and fewer in quiet weeks.
+At ₹5,000 risk and a lot of 65, one lot needs a credit of about 25.6 points
+or more. Each trade earns a small credit most weeks, and occasionally loses up
+to its fixed maximum.
 
-- **The verdict needs an edge of about 0.15R a trade** before two and a half
-  years of weekly trades can show it. A smaller edge will most likely end in
+- **The verdict needs a large edge**, about 0.15R a trade. That would show up
+  in about 2.5 years of weekly trades. A smaller edge will most likely end in
   FAIL.
 - **Paper profit is not evidence until the verdict says PASS.** The record
-  still measures real costs and fill quality, and any later F&O idea needs those.
+  still measures real costs and fill quality, and any later F&O idea needs
+  those.
+- **Live trading is far off.** Even after a PASS, V could not be traded live on
+  ₹5,00,000: at the 0.25% live risk cap, one lot needs about ₹16–21 lakh.
 
 ## Known gaps — read before trusting it
 
@@ -444,9 +457,10 @@ state/                       gitignored — account data never goes to git
     execution_policy.json    live only, optional: your signed autonomous policy
     KILL                     mode kill switch (circuit breakers write here)
   replays/<run-id>/replay/   one directory per replay run
-  paper_fno/                 F&O paper book for strategy V
-    book.json                trades, cycles, manual settlement values
-    journal.jsonl            hash-chained; `fno evaluate` reads only this
+  paper_fno/                 F&O paper book for strategy V (always under the repo's state/)
+    journal.jsonl            hash-chained; the record — state is rebuilt from it every pass
+    book.json                a readable snapshot of the journal, not the record
+    master/YYYY-MM-DD.json   the day's first contract master, used by every pass that day
     KILL                     F&O-only kill switch
     runner.lock              one pass at a time
 ```
