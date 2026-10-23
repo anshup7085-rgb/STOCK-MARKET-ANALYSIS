@@ -182,7 +182,7 @@ before you pay or trade — these rules changed in 2025–26 and may change agai
 | Zerodha account + Kite Connect app | Order API and, on the paid plan, market data | Zerodha's support pages (checked 2026-10-19): the **Personal** plan is free and covers orders and account APIs but no live or historical data; the **Connect** plan is Rs500/month per API key with live data and historical candles. From October 2026 Zerodha credits the Rs500 in months where you pay at least Rs2,000 of brokerage. Orders alone work on the free plan with `--provider yfinance`; the live price check needs the paid plan or Groww data. |
 | **Static IP**, whitelisted on the app | Zerodha accepts API **orders** only from a registered static IP from 1 April 2026; read-only calls work from anywhere | Up to two IPs (primary + secondary). Simplest: a small VPS with a static IP, which is also where cron runs. IPs may only be shared within immediate family. |
 | Demat debit authorisation (DDPI) | Automated **sell** orders of delivery holdings — every stop and target here — need it | Without it, sells wait for a per-sell CDSL authorisation and GTT legs can fail. Zerodha charges Rs100 + GST (Rs118) once to activate it (support page, checked 2026-10-19). |
-| A daily manual login | Access tokens expire each morning; SEBI's framework expects a human 2FA login each trading day | `python tools/kite_session.py` — you log in on Zerodha's page; it prints the export line. It never stores your secret or a TOTP seed. |
+| A daily manual login | Access tokens expire each morning; SEBI's framework expects a human 2FA login each trading day | `eval "$(python tools/kite_session.py --eval)"` — you log in on Zerodha's page and paste the address you land on; the token is set in your shell without being shown. It never stores your secret, the token or a TOTP seed. |
 | Algo ID, if required | The exchange framework tags algo orders | Ask Zerodha whether a self-built strategy at this order rate needs one. If they issue one, `export KITE_ALGO_ID=...` and every order carries it. |
 
 **Groww**, if you trade through it instead:
@@ -251,8 +251,8 @@ journal) and gives a forward read on the score, not a strategy worth money.
 
 **Live** — by hand, because each order needs you:
 
-1. ~09:00 — mint today's token (`python tools/kite_session.py` for Zerodha; your
-   own token step for Groww) and export it.
+1. ~09:00 — mint today's token (`eval "$(python tools/kite_session.py --eval)"` for
+   Zerodha; your own token step for Groww).
 2. ~09:20 — `python run_trader.py cycle --mode live --broker kite --provider kite --backtest ...`
    (or `--broker groww --provider groww`).
    It reconciles, scans on yesterday's completed bar, checks each name's live
