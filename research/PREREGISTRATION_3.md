@@ -40,10 +40,10 @@ holder, confirming each order.
 | Cadence | At most one trade per weekly NIFTY expiry. It opens at the first of 17 fixed slots (10:00–14:00 IST) on an eligible session where every check passes, and is held to expiry. It is cash-settled at **NSE's final settlement price** (section 3) |
 | Paper equity | **₹5,00,000, fixed.** A book started with any other amount is not this test |
 | Size | Risk budget **B = ₹5,000** a trade (1% of the starting equity, fixed). n is the largest number of lots, at most 10, whose maximum loss M(n), costs included, is ≤ B. In practice n is 0 or 1 (section 8) |
-| Missed weeks | A cycle whose entry slots the runner did not observe counts as a full loss, R = −1 (section 5). Skipping a week can never help |
+| Missed weeks | A cycle whose entry slots were not observed on good data counts as a full loss, R = −1 (section 5). Skipping a week cannot help, except in a week the index settles more than W beyond a long strike |
 | Statistic | An anytime-valid **betting test** on R, over every counted cycle in expiry order. It may be read after every trade with no penalty for looking (section 12) |
 | PASS | The test's wealth reaches **200** (α = 0.005) |
-| FAIL | Any one of: realised loss reaches ₹50,000; mean R of the first 60 items in the sequence is ≤ 0; 250 items, or 300 weekly expiries, without a PASS; or the test is abandoned |
+| FAIL | Any one of: realised loss reaches ₹50,000; mean R of the first 60 items in the sequence is ≤ 0; 250 items, or 300 counted cycles, without a PASS; any R below −2; the rules change; or the test is abandoned |
 | Budget | **Forward slot 1 of 10**, in a new forward family, α = 0.005 (section 14). The historical family is untouched: 5 of its 10 slots are spent |
 | Expected pace | Unknown. At most about 50 trades a year, and fewer for every week whose credit is below the one-lot threshold (section 8). The realised pace is reported |
 
@@ -130,8 +130,9 @@ futures idea needs its own registration.
 - **Instrument.** NIFTY 50 index options on NSE's F&O segment (NFO), underlying
   name `NIFTY` in the contract master. European, cash-settled.
 - **Contract master.** Read from the feed once each trading day. The first
-  successful read of the day is saved in the state directory with its SHA-256,
-  and every pass that day, in any process, uses that copy.
+  successful read of the day is saved in the state directory and its SHA-256
+  is journaled. Every pass that day, in any process, uses that copy. A saved
+  copy that does not match its journaled hash stops the engine.
   - **No contract fact is hard-coded**: not the lot size, the strike interval
     or the expiry weekday. Two skeptics could not independently confirm any of
     the three.
@@ -147,10 +148,12 @@ futures idea needs its own registration.
   timestamp.
 - **Feed.** Zerodha Kite Connect or the Groww trading API, each on a paid plan.
   - Chosen once, at `fno init`. Before the book starts, the feed must pass a
-    journaled probe of NIFTY options showing a best bid and a best ask.
-  - Fixed for the book. A switch to the other feed is allowed only after the
-    bound feed failed every entry slot of two consecutive eligible sessions.
-    Those sessions are named in the journal, and the switch is permanent.
+    journaled probe of NIFTY options showing a best bid and a best ask, and a
+    quote timestamp on the index or on an option.
+  - Fixed for the book. One switch to the other feed is allowed, only after two
+    adjacent counted cycles were MISSED because the bound feed's last attempt
+    at the first unobserved slot of each failed for want of data. The journal
+    names those cycles. The switch is permanent; there is no second switch.
   - Every journal record names its feed.
   - Adding any other data source is a new registration.
   - Synthetic (mock) data never enters the paper journal. The engine refuses it.
@@ -167,25 +170,30 @@ futures idea needs its own registration.
   1. **NSE's file.** P is derived from NSE's F&O bhavcopy for E, from the
      settlement prices of the expiring NIFTY options: K + settlement price
      for an in-the-money call, K − settlement price for a put.
-     - At least four contracts must give the same value to the paisa.
-       Otherwise this source gives nothing.
+     - At least four distinct contracts must give exactly the same value,
+       to the paisa. Otherwise this source gives nothing.
      - Every column it reads is checked by name.
   2. **The close rule, for expiries before 7 Dec 2026 only.** If NSE's file
      gives nothing, P is the feed's daily index close for E, if Yahoo's
      `^NSEI` close for E agrees with it within 0.10 index points. A quote's
      `ohlc.close` is never used: Kite documents it as the previous session's
      close.
-  3. **Checks on P from either source.** Where the feed's daily close for E
-     exists:
+  3. **Checks on P from any source.** P must be a finite positive number.
+     Where the feed's daily close for E exists (else Yahoo's):
      - for expiries before 7 Dec 2026, P must lie within 0.10 index points of
        it;
      - for any expiry, P must lie within 3% of it.
 
      Otherwise settlement waits, and the reason is journaled.
-  4. **By hand.** The operator may enter NSE's published final settlement
-     price, with the URL of NSE's file. This is allowed only after a
-     settlement pass on a trading day after E has failed steps 1–3. The value
-     still has to pass step 3's checks.
+  4. **By hand.** Only after a settlement pass on a trading day after E has
+     failed steps 1–3, the operator may supply NSE's F&O bhavcopy file for E,
+     downloaded by hand.
+     - P is derived from it exactly as in step 1, and its SHA-256 is
+       journaled.
+     - A typed value is never accepted.
+     - Steps 1 and 2 are still tried first at every pass.
+     - A hand-supplied file is accepted only where the feed's or Yahoo's close
+       for E exists, and P must pass step 3.
   5. **No value.** A trade with no P by the 10th trading day after E is
      settled at its maximum loss, R = −1. That is the worst case, unless the
      index settled more than W beyond a long strike.
@@ -200,6 +208,10 @@ futures idea needs its own registration.
   - A year must be covered before its first session: the file must hold that
     year's NSE holiday list, from a named source. Until it does, no entry pass
     runs that year, and the days are journaled as not observed.
+  - The file may change during the test only for dates after the day a pass
+    first reads the change. The engine journals each version it reads. A
+    version that changes a date on or before that day stops the engine, so
+    past sessions can never be re-labelled.
   - Today the file holds 2026 only, and it is unverified.
 - **The weekly run.** From each day's master, take the NIFTY expiries on or
   after today, starting from the nearest. The run stops at the first gap of
@@ -229,6 +241,7 @@ futures idea needs its own registration.
     at any other time does settlement only.
   - Within a slot's window, the runner may retry a pass that failed for want of
     data, up to three attempts. Only the last attempt's failure is journaled.
+  - A slot is decided once. A second pass in the same slot does nothing.
 - **The trade.** The first slot of the cycle at which every check in sections
   6–8 passes opens the trade.
 - **Observed.** A slot is observed if its pass reached the rule checks, whether
@@ -237,6 +250,15 @@ futures idea needs its own registration.
   - no pass ran in it (runner absent, crashed or late, machine asleep, or
     another process holding the state lock);
   - the data was unavailable on the last attempt;
+  - the pass failed a check of the feed or the machine rather than the
+    market, on the last attempt:
+    - the index value, or either at-the-money option, was stamped more than
+      120 s before T (if the index has no timestamp, the freshest of the six
+      option quotes is the test);
+    - any quote was stamped more than 5 s after T;
+    - an option had no quote at all;
+    - the snapshot was slow (section 7), or nothing was dated today;
+    - T fell outside the slot's window;
   - the kill switch blocked it;
   - the year's holiday list was missing.
 
@@ -245,7 +267,8 @@ futures idea needs its own registration.
   its slots if it has no trade, was unobserved.
   - A MISSED cycle opens no trade, even if a later slot would pass.
   - It enters the statistic as **R = −1**. That is no better than any trade
-    could have done, so skipping a cycle can never raise the result.
+    could have done unless the index settled more than W beyond a long strike
+    (section 12), so skipping a cycle can raise the result only in such a week.
 - **No trade.** A cycle with every slot observed and no slot passing every
   check has no trade. It is not in the sequence (section 12).
 - **The kill switch** (`state/paper_fno/KILL` or `state/KILL`) is for faults
@@ -277,13 +300,19 @@ Otherwise there is no trade at this pass.
 
 - **Two-sided.** Each of the six options has bid > 0 and ask > bid.
 - **Spread.** ask − bid ≤ max(1.00, 0.10 × mid) index points.
-- **Fresh.** T minus the quote timestamp is ≤ 120 seconds, for the index and
-  for each option that has a timestamp. An option without one is flagged.
+- **Fresh.** T minus the quote timestamp is ≤ 120 seconds for each option that
+  has a timestamp; an option without one is flagged.
+  - An older quote on one of the four legs is a market condition (an illiquid
+    strike), and the pass is a no-trade.
+  - An older quote on the at-the-money pair, which trades continuously, is a
+    feed check (section 5), as are the index check and any timestamp after T.
 - **Coherent.** All six option quotes are read after S, the last of them within
   10 seconds of T. Otherwise: no trade at this pass ("slow snapshot").
 - **Dated today.** The index quote, or at least one option quote, carries a
   timestamp dated today.
 - **Clock.** T is the runner machine's clock, which must be NTP-synchronised.
+  It is checked against the exchange timestamps at every pass (section 5),
+  never taken on trust.
 
 ## 8. Fill, credit and size
 
@@ -390,6 +419,10 @@ feed and the Zerodha card on Kite. For options the two are identical.
 - **Fixed.** Every limit in sections 4–12 is fixed for the test. Changing any of
   them, tighter or looser, ends the test at that moment. The verdict is then
   the one already reached, or FAIL if none was.
+  - The engine refuses to run with parameters other than those its FNO_INIT
+    records.
+  - An FNO_ENTRY or FNO_SETTLED carrying a different hash of this text, or of
+    the parameters, ends the test in the same way.
 
 ## 12. The statistic
 
@@ -443,28 +476,37 @@ numbered i = 1, 2, …
   inequality bounds the chance that it *ever* reaches 1/α by α.
   - **If any R_i < −2 ever occurs**, V is FAIL ("bound broken"). Setting K to 0
     would not keep the test valid.
-  - **MISSED cycles** enter at −1, at or below what a trade could have done.
+  - **MISSED cycles** enter at −1, a fixed value at or below 0, so they keep
+    the supermartingale whatever caused them.
   - **Cycles without a trade** are chosen by rules using only information
     available at the pass.
 
   Neither can raise the false-pass rate.
 
-**Outcomes.** Evaluated as each item joins the run, the first to occur decides.
-Within one item the order is:
+**Outcomes.** Evaluated cycle by cycle in expiry order, as each joins the run;
+the first to occur decides. Within one item the order is:
 
-1. **FAIL, harm**: net P&L of the trades among items 1 … i ≤ −₹50,000.
-2. **PASS**: K_i ≥ **200**.
-3. **FAIL, futility**: i = 60 and mean(R_1 … R_60) ≤ 0.
-4. **FAIL, no evidence**: i = 250, or 300 counted cycles closed, without a
-   PASS.
+1. **FAIL, bound broken**: R_i < −2.
+2. **FAIL, harm**: net P&L of the trades among items 1 … i ≤ −₹50,000.
+3. **PASS**: K_i ≥ **200**.
+4. **FAIL, futility**: i = 60 and mean(R_1 … R_60) ≤ 0.
+5. **FAIL, no evidence**: i = 250.
+
+After each counted cycle, item or not: **FAIL, no evidence** once 300 counted
+cycles have closed without a PASS.
+
+**Once an FNO_VERDICT is journaled, it is the verdict.** A later recomputation
+that differs is reported as a discrepancy, never substituted.
 
 Two more FAILs can occur at any point:
 
 - **FAIL, abandoned**: no contract master was read for more than 21 days, or
   the weekly expiry chain has a gap of more than 10 days. Either way the
   counted cycles can no longer be known. (If NSE ever ends NIFTY weekly
-  expiries, the second rule ends V.)
-- **FAIL, bound broken**: as above.
+  expiries, the second rule ends V.) It decides on its own date: the 22nd day
+  without a master, or the day after the gap opens. It applies only to cycles
+  that resolve on or after that date.
+- **FAIL, the rules changed**: section 11.
 
 The engine stops entering when an outcome is reached, and not before. Stopping
 early, for futility, harm, time or abandonment, can only lower the false-pass
@@ -620,24 +662,40 @@ It spends one **historical** slot (the sixth).
   - If the journal holds more than one FNO_ENTRY for one expiry, or more than
     one close for one trade, the first is the record. Any later one is void:
     reported, never evaluated, and it makes the journal NOT EVALUABLE.
+  - An FNO_ENTRY is also void if:
+    - an FNO_CYCLE for its expiry precedes it;
+    - its slot was already decided;
+    - it was written more than 5 minutes after its slot began.
+  - The FNO_ENTRY is written before its slot's FNO_PASS, so a crash between
+    them keeps the trade and marks the slot.
+  - A torn last line (a power cut mid-append) is reported and tolerated when
+    the next record chains to the last whole one.
   - The engine rebuilds its state from the journal on every pass. `book.json`
     is a readable snapshot only.
 - **Binding.**
   - The engine refuses every real feed while this file carries the draft
     notice, or does not match the SHA-256 recorded in
     `trading/fno/strategy_v.py`.
-  - It also refuses while V's code, the fee card, the calendar code or the
-    holiday file has uncommitted changes.
+  - It also refuses while the repository has any uncommitted change or
+    untracked file, other than `research/ROUND3_LOG.md`.
   - FNO_INIT, FNO_ENTRY and FNO_SETTLED carry this file's hash and the code's
     git commit.
   - A book whose FNO_INIT predates the binding commit is not evidence.
 - **One book.** V's paper book is `state/paper_fno` under the repository,
   whatever `TRADING_STATE_DIR` says.
   - `fno init` refuses a state directory whose journal already holds records.
-  - Each entry and settlement message to the account holder carries the
-    journal's sequence number and head hash. Those messages anchor the chain
-    outside the machine. The head hashes are copied into
-    `research/ROUND3_LOG.md` when available.
+  - **Anchors.** `fno anchor` prints the journal's sequence number and head
+    hash, as a line `anchor: seq N sha256 H`.
+    - The line is committed to `research/ROUND3_LOG.md` and pushed to GitHub.
+      It must cover every FNO_ENTRY and FNO_SETTLED within 7 days, so in
+      practice this happens weekly.
+    - GitHub's record of when each anchor was pushed is the outside clock.
+    - `fno evaluate` checks every anchor against the journal. A mismatch makes
+      the journal NOT EVALUABLE.
+    - A PASS is reported only if every FNO_ENTRY and FNO_SETTLED is covered by
+      an anchor committed within 7 days of it. FAILs need no anchor.
+    - Messages to the account holder also carry the head hash. They are a
+      second copy, not the anchor.
   - Any other FNO_INIT on real data after the binding commit must be reported:
     a second book, a restart, another state root or a second runner. The
     verdict comes from the first book only. If that book's journal is lost or
@@ -646,7 +704,9 @@ It spends one **historical** slot (the sixth).
   - the journal verifies;
   - every record has mode `fno-paper`;
   - there is exactly one FNO_INIT, carrying the registered hash;
-  - no record is void.
+  - no record is void;
+  - no day has two contract masters, and every entry pass used its day's;
+  - the holiday file matches the last version journaled, for past dates.
 
   Otherwise it reports NOT EVALUABLE.
 - **Silences.** Where sections 3–12 are silent or ambiguous, the behaviour of
@@ -664,8 +724,12 @@ It spends one **historical** slot (the sixth).
 - **Before a PASS is reported**, every item's R is recomputed from the
   journal's recorded quotes, fills and settlement values. The recomputation is
   done by an implementation written from this document without reading
-  `trading/fno/`. Where the two disagree, the lower R governs. A disagreement
-  on the verdict records the failing outcome.
+  `trading/fno/`.
+  - Every P is re-derived from NSE's bhavcopy for E, fetched again for the
+    recomputation.
+  - The anchors are checked against GitHub's push history.
+  - Where the two implementations disagree, the lower R governs. A
+    disagreement on the verdict records the failing outcome.
 
 ## 18. Operation
 
@@ -688,6 +752,9 @@ It spends one **historical** slot (the sixth).
 - **Static IP.** Zerodha's support page (checked 2026-10-19) says read-only API
   calls need no static IP. For Groww this is unchecked; confirm it before
   relying on it.
+- **Weekly.** `fno anchor --append`, then commit and push
+  `research/ROUND3_LOG.md`. Or send the printed line to be committed. The
+  runner warns when anchoring falls behind.
 - **Commands.** `fno status` and `fno evaluate` show the record and the
   statistic. `fno verify` checks the journal's hash chain.
 

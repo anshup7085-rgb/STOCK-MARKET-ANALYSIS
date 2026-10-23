@@ -58,6 +58,12 @@ REGISTERED = VParams()
 ROLES = (("short_call", "CE", "SELL"), ("short_put", "PE", "SELL"),
          ("long_call", "CE", "BUY"), ("long_put", "PE", "BUY"))
 
+# Skips caused by the feed or the machine, not the market (section 5): the engine
+# treats them as data failures, so the slot is unobserved and never a rule outcome.
+DATA_CODES = frozenset({"index_stale", "clock", "no_quote", "slow_snapshot", "no_timestamp_today",
+                        "stale_snapshot"})
+FUTURE_TOLERANCE_S = 5
+
 
 def milli(x: float) -> int:
     """Exact decimal comparison for prices on a 0.05 tick: everything is a multiple of 0.005 (8)."""
@@ -208,10 +214,18 @@ def plan_entry(master: ContractMaster, expiry: date, index: IndexQuote,
     snap["index"] = index.as_dict()
     t = index.fetched_at
     flags: list[str] = []
-    if index.exchange_ts is None:
-        flags.append("index value has no exchange timestamp; fetch time used")
-    elif (t - index.exchange_ts).total_seconds() > p.max_quote_age_s:
-        return Skip("index_stale", f"index value {int((t - index.exchange_ts).total_seconds())}s old")
+
+    def clock_problem(ts: datetime | None, what: str) -> Skip | None:
+        if ts is not None and (ts - t).total_seconds() > FUTURE_TOLERANCE_S:
+            return Skip("clock", f"{what} stamped {int((ts - t).total_seconds())}s after the pass time: "
+                                 "the machine clock is behind")
+        return None
+
+    if index.exchange_ts is not None:
+        if (t - index.exchange_ts).total_seconds() > p.max_quote_age_s:
+            return Skip("index_stale", f"index value {int((t - index.exchange_ts).total_seconds())}s old")
+        if (bad := clock_problem(index.exchange_ts, "the index value")):
+            return bad
     s = round(index.value, 2)
 
     both = sorted(set(master.strikes(expiry, "CE")) & set(master.strikes(expiry, "PE")))
@@ -224,6 +238,13 @@ def plan_entry(master: ContractMaster, expiry: date, index: IndexQuote,
     atm_q = {}
     for c in atm:
         q = quotes.get(c.symbol)
+        if q is None:
+            return Skip("no_quote", f"the feed returned no quote for {c.symbol}")
+        if (bad := clock_problem(q.exchange_ts, c.symbol)):
+            return bad
+        if q.exchange_ts is not None and (t - q.exchange_ts).total_seconds() > p.max_quote_age_s:
+            # The at-the-money pair trades continuously: a stale one is the feed, not the market.
+            return Skip("stale_snapshot", f"{c.symbol} quote {int((t - q.exchange_ts).total_seconds())}s old")
         why = quote_problem(q, t, p)
         if why:
             return Skip("atm_quote", f"{c.symbol}: {why}")
@@ -254,6 +275,10 @@ def plan_entry(master: ContractMaster, expiry: date, index: IndexQuote,
     leg_q = {}
     for role, _, _ in ROLES:
         q = quotes.get(contracts[role].symbol)
+        if q is None:
+            return Skip("no_quote", f"the feed returned no quote for {role} {contracts[role].symbol}")
+        if (bad := clock_problem(q.exchange_ts, contracts[role].symbol)):
+            return bad
         why = quote_problem(q, t, p)
         if why:
             return Skip("leg_quote", f"{role} {contracts[role].symbol}: {why}")
@@ -261,9 +286,15 @@ def plan_entry(master: ContractMaster, expiry: date, index: IndexQuote,
     every = list(leg_q.values()) + list(atm_q.values())
     if max(q.fetched_at for q in every) > t + timedelta(seconds=p.max_snapshot_s):
         return Skip("slow_snapshot", f"option quotes read more than {p.max_snapshot_s}s after the index value")
-    stamps = [q.exchange_ts for q in every] + [index.exchange_ts]
-    if not any(ts is not None and ts.date() == t.date() for ts in stamps):
-        return Skip("no_timestamp_today", "neither the index nor any option quote carries an exchange timestamp dated today")
+    stamps = [q.exchange_ts for q in every if q.exchange_ts is not None]
+    if index.exchange_ts is None:
+        flags.append("index value has no exchange timestamp; the freshest option quote is the clock check")
+        if not stamps:
+            return Skip("no_timestamp_today", "neither the index nor any option quote carries a timestamp")
+        if (t - max(stamps)).total_seconds() > p.max_quote_age_s:
+            return Skip("stale_snapshot", f"the freshest option quote is {int((t - max(stamps)).total_seconds())}s old")
+    if not any(ts.date() == t.date() for ts in stamps + ([index.exchange_ts] if index.exchange_ts else [])):
+        return Skip("no_timestamp_today", "neither the index nor any option quote carries a timestamp dated today")
     if any(q.exchange_ts is None for q in every):
         flags.append("an option quote has no exchange timestamp; fetch time used")
 

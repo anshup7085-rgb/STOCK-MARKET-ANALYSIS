@@ -8,8 +8,9 @@
     fno status
     fno evaluate [--json scans/fno_eval.json]
     fno verify
-    fno settle   --expiry YYYY-MM-DD --value 25012.35 --source "https://nsearchives.nseindia.com/..."
-    fno switch-feed --feed groww --reason "..." --failed-sessions 2026-11-11 2026-11-12
+    fno settle   --expiry YYYY-MM-DD --file BhavCopy_NSE_FO_0_0_0_YYYYMMDD_F_0000.csv.zip
+    fno anchor   [--append]                 # the journal's head, for research/ROUND3_LOG.md (commit and push it)
+    fno switch-feed --feed groww --reason "..." --expiries 2026-11-17 2026-11-24
     fno demo     [--weeks 8]                # SYNTHETIC wiring check in a temp dir, never the paper book
 
 Paper only. There is no --mode and no order anywhere: nothing here can trade.
@@ -29,9 +30,9 @@ from market.calendar import load_calendar
 from market.config import IST
 from market.providers.base import DataUnavailable
 from trading.fno.book import RunnerBusy
-from trading.fno.engine import (MOCK_DIR_SUFFIX, REPO_ROOT, FeedRefused, FnoEngine, record_manual_settlement,
-                                registration)
-from trading.fno.evaluate import evaluate
+from trading.fno.engine import (ANCHOR_LOG, MOCK_DIR_SUFFIX, REPO_ROOT, FeedRefused, FnoEngine,
+                                record_manual_settlement, registration)
+from trading.fno.evaluate import ANCHOR_DAYS, anchor_line, anchors, evaluate
 from trading.fno.strategy_v import REGISTERED, slot_times
 from trading.journal import Journal, verify_file
 
@@ -138,6 +139,12 @@ def cmd_run(args) -> int:
     today = datetime.now(IST).date()
     eng.journal.append("FNO_RUNNER_START", asof=today.isoformat(), feed=eng.feed.key)
     worst = 0
+    behind = anchoring_behind()
+    if behind:
+        msg = (f"V anchoring is behind: records {behind[:5]} have no anchor committed. Run `fno anchor --append`, "
+               "then commit and push research/ROUND3_LOG.md. A PASS cannot be reported without it.")
+        print(f"[warning] {msg}", file=sys.stderr)
+        alerter.send(f"[F&O PAPER] {msg}", "fno")
     try:
         rep, _ = eng.run_pass()
         worst = _finish(rep, alerter)
@@ -212,17 +219,38 @@ def cmd_verify(args) -> int:
 
 def cmd_settle(args) -> int:
     try:
-        record_manual_settlement(state_dir(), args.expiry, args.value, args.source)
+        value = record_manual_settlement(state_dir(), args.expiry, Path(args.file))
     except ValueError as exc:
         print(f"[refused] {exc}", file=sys.stderr)
         return 2
-    print(f"recorded {args.value} for {args.expiry}; the next pass checks and settles it")
+    print(f"NSE's file gives {value} for {args.expiry}; the next pass checks it against the close and settles")
     return 0
+
+
+def cmd_anchor(args) -> int:
+    line = anchor_line(state_dir() / "journal.jsonl")
+    print(line)
+    if args.append:
+        with ANCHOR_LOG.open("a") as fh:
+            fh.write(f"\n{line}\n")
+        print(f"appended to {ANCHOR_LOG}; now commit and push it: "
+              "git add research/ROUND3_LOG.md && git commit -m 'V anchor' && git push")
+    return 0
+
+
+def anchoring_behind() -> list[int]:
+    """Entries and settlements more than five days old with no anchor in the log at or after them (section 17)."""
+    recs = Journal(state_dir() / "journal.jsonl", "fno-paper").records()
+    anc = anchors(ANCHOR_LOG, recs)
+    limit = datetime.now(IST) - timedelta(days=ANCHOR_DAYS - 2)
+    have = [a["seq"] for a in anc["anchors"]]
+    return [r["seq"] for r in recs if r["type"] in ("FNO_ENTRY", "FNO_SETTLED")
+            and datetime.fromisoformat(r["ts"]) < limit and not any(s >= r["seq"] for s in have)]
 
 
 def cmd_switch_feed(args) -> int:
     eng = FnoEngine(_feed(args.feed), state_dir())
-    eng.switch_feed(args.reason, args.failed_sessions)
+    eng.switch_feed(args.reason, args.expiries)
     print(f"book now reads {args.feed}")
     return 0
 
@@ -278,15 +306,17 @@ def add_parser(sub) -> None:
     q = fs.add_parser("evaluate"); q.add_argument("--json", dest="json_out", default=None)
     q.set_defaults(fn=cmd_evaluate)
     q = fs.add_parser("verify"); q.set_defaults(fn=cmd_verify)
-    q = fs.add_parser("settle", help="NSE's published final settlement price, after the automatic sources failed")
+    q = fs.add_parser("settle", help="NSE's F&O bhavcopy for the expiry, downloaded by hand, after the automatic sources failed")
     q.add_argument("--expiry", required=True)
-    q.add_argument("--value", type=float, required=True)
-    q.add_argument("--source", required=True, help="the URL of NSE's file the value was read from")
+    q.add_argument("--file", required=True, help="the bhavcopy .zip or .csv as downloaded from NSE")
     q.set_defaults(fn=cmd_settle)
-    q = fs.add_parser("switch-feed", help="only after the bound feed failed every slot of two eligible sessions")
+    q = fs.add_parser("anchor", help="print the journal's head for research/ROUND3_LOG.md")
+    q.add_argument("--append", action="store_true", help="append it to research/ROUND3_LOG.md")
+    q.set_defaults(fn=cmd_anchor)
+    q = fs.add_parser("switch-feed", help="once, after two adjacent cycles were MISSED by the bound feed's data failures")
     feed(q)
     q.add_argument("--reason", required=True)
-    q.add_argument("--failed-sessions", nargs=2, required=True, metavar="YYYY-MM-DD")
+    q.add_argument("--expiries", nargs=2, required=True, metavar="YYYY-MM-DD")
     q.set_defaults(fn=cmd_switch_feed)
     q = fs.add_parser("demo", help="SYNTHETIC wiring check; writes only to a temp dir")
     q.add_argument("--weeks", type=int, default=8)

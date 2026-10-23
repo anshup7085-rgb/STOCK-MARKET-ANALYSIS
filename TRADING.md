@@ -348,8 +348,9 @@ look dangerous could flatter the result.
 | `fno evaluate [--json F]` | The registered statistic and verdict, plus the descriptive record, from the journal alone |
 | `fno verify` | Re-hash the journal chain |
 | `fno pass --feed F` | One settlement-only pass now (entries happen only in the runner's slots) |
-| `fno settle --expiry D --value V --source URL` | Enter NSE's published settlement price by hand, only after an automatic attempt on a later trading day failed; the URL must be NSE's |
-| `fno switch-feed --feed F --reason R --failed-sessions D1 D2` | Move the book to the other feed, only after the bound one failed every slot of two eligible days |
+| `fno settle --expiry D --file F` | Supply NSE's F&O bhavcopy for the expiry, downloaded by hand, only after an automatic attempt on a later trading day failed. The price is derived from the file; a typed value is never accepted |
+| `fno anchor --append` | Append the journal's head hash to `research/ROUND3_LOG.md`; commit and push it weekly (or send the line to be committed). A PASS cannot be reported without these anchors |
+| `fno switch-feed --feed F --reason R --expiries E1 E2` | Move the book to the other feed, once, only after two adjacent weeks were missed because the bound feed failed |
 | `fno demo` | Synthetic wiring check in a temp directory. Never touches the paper book |
 | `kill --reason R` | For faults or absence only. It blocks entries, and a blocked week counts as missed |
 
