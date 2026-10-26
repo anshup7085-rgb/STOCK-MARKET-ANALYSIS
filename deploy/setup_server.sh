@@ -107,12 +107,15 @@ if bad="$(forbidden_in "$ENV_FILE")"; then
   exit 1
 fi
 
-# 3b. `morning`: the day's login and both F&O paper runners in one word (deploy/morning.sh)
+# 3b. `morning` (the day's login and both F&O paper runners) and `evening` (the day's report)
 MORNING="alias morning='$REPO/deploy/morning.sh'"
-if ! grep -qxF "$MORNING" "$HOME/.bashrc" 2>/dev/null; then
-  echo "$MORNING" >>"$HOME/.bashrc"
-  say "added the 'morning' command to ~/.bashrc (it works in new terminals)"
-fi
+EVENING="alias evening='$REPO/deploy/evening.sh'"
+for line in "$MORNING" "$EVENING"; do
+  if ! grep -qxF "$line" "$HOME/.bashrc" 2>/dev/null; then
+    echo "$line" >>"$HOME/.bashrc"
+    say "added: $line (it works in new terminals)"
+  fi
+done
 
 # 4. The suites, on this machine's Python and packages, in a clean environment
 #    so a risk override in your shell cannot fail (or pass) them
