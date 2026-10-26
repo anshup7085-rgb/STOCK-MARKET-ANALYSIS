@@ -52,17 +52,33 @@ def main() -> int:
     print("\n2. After login you land on your redirect URL (a page that does not load). Paste its\n"
           "   whole address, or just the request_token in it.\n", file=out)
     request_token = request_token_from(_ask("request_token: "))
-    secret = getpass.getpass("API secret (hidden, not stored): ").strip()
-    if not request_token or not secret:
-        print("Need both the request token and the secret.", file=sys.stderr)
+    if not request_token:
+        print("No request token.", file=sys.stderr)
         return 2
-    try:
-        data = kite.generate_session(request_token, api_secret=secret)
-    except Exception as exc:
-        print(f"Token exchange failed: {exc}", file=sys.stderr)
+    data = None
+    for attempt in range(3):            # a mistyped or twice-pasted secret need not cost a new login
+        secret = getpass.getpass("API secret (hidden as you paste it: paste once, then Enter): ").strip()
+        if not secret:
+            print("No secret.", file=sys.stderr)
+            continue
+        try:
+            data = kite.generate_session(request_token, api_secret=secret)
+            break
+        except Exception as exc:
+            if "checksum" in str(exc).lower():
+                print("That API secret does not match the app (pasted twice?). Try again: paste it once, "
+                      "then Enter.", file=sys.stderr)
+                continue
+            print(f"Token exchange failed: {exc}", file=sys.stderr)
+            if "expired" in str(exc).lower() or "invalid" in str(exc).lower():
+                print("The login code is used up or too old: log in to Zerodha again and paste the new address.",
+                      file=sys.stderr)
+            return 2
+        finally:
+            secret = None  # noqa: F841 — drop the reference
+    if data is None:
+        print("Three wrong secrets: start again.", file=sys.stderr)
         return 2
-    finally:
-        secret = None  # noqa: F841 — drop the reference
     if as_eval:
         print(f"export KITE_API_KEY={shlex.quote(api_key)}")
         print(f"export KITE_ACCESS_TOKEN={shlex.quote(data['access_token'])}")
