@@ -27,6 +27,12 @@ main() {   # parsed whole before it runs, so the pull below cannot change it mid
   mkdir -p logs
   env -u KITE_ACCESS_TOKEN -u KITE_API_KEY PYTHONPATH=. setsid nohup timeout 300 \
     .venv/bin/python tools/record_context.py >>"logs/context-$(date +%F).log" 2>&1 </dev/null &
+  # Once: what this Kite app's historical API can fetch (counts and dates only, read-only). It
+  # needs today's login; a second login could end the runners' one, so it rides on this one.
+  if [ ! -e logs/kite-history-check.done ]; then
+    PYTHONPATH=. setsid nohup timeout 600 .venv/bin/python tools/kite_history_check.py \
+      >"logs/kite-history-check-$(date +%F).log" 2>&1 </dev/null &
+  fi
   echo
   echo "All set. You can close this window and switch off your laptop or phone."
 }

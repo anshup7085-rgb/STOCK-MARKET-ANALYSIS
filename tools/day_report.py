@@ -138,6 +138,10 @@ def main() -> int:
     print("\n".join(summary(read_day(REPO, day))))
     print("\n--- strategy V ---")
     print("\n".join(strategy_v(day)))
+    check = REPO / "logs" / f"kite-history-check-{day}.log"
+    if check.exists():
+        print("\n--- Kite historical data check (one time; counts and dates only) ---")
+        print(check.read_text(errors="replace").strip()[:4000])
     print("\n--- journals ---")
     for name, d in (("explorer", EXPLORE), ("what-if", WHATIF), ("V", V)):
         p = d / "journal.jsonl"
