@@ -6,4 +6,6 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 git pull -q --ff-only 2>/dev/null || true
+# today's public market context (FII/DII, VIX, put-call ratio); a source not yet published is retried next time
+PYTHONPATH=. .venv/bin/python tools/record_context.py >/dev/null 2>&1 || echo "(market context not recorded)"
 PYTHONPATH=. .venv/bin/python tools/day_report.py "$@"

@@ -19,6 +19,7 @@ from datetime import date, datetime
 from pathlib import Path
 
 from market.config import IST
+from trading.fno.context import read_day, summary
 from trading.fno.explore import Ticks, format_scoreboard, scoreboard
 from trading.journal import Journal, verify_file
 
@@ -133,6 +134,8 @@ def main() -> int:
     print("\n".join(explorer(day)))
     print("\n--- what-if (every signal, 1 lot, no budget or position limits; not the test) ---")
     print("\n".join(whatif(day)))
+    print("\n--- market context (recorded for later tests; not used to trade) ---")
+    print("\n".join(summary(read_day(REPO, day))))
     print("\n--- strategy V ---")
     print("\n".join(strategy_v(day)))
     print("\n--- journals ---")
