@@ -24,6 +24,7 @@ from trading.journal import Journal, verify_file
 
 REPO = Path(os.environ.get("FNO_REPORT_ROOT") or Path(__file__).resolve().parents[1])   # the override is for tests
 EXPLORE, V = REPO / "state" / "fno_explore", REPO / "state" / "paper_fno"
+ON_TIME = "09:10"                                    # the agreed latest start
 ERROR_WORDS = ("Traceback", "Error", "[refused]", "failed", "pass failed")
 
 
@@ -40,6 +41,8 @@ def explorer(day: str) -> list[str]:
     ticks = Ticks(EXPLORE).read(day)
     if ticks:
         out.append(f"runner: {len(ticks)} index readings, {_hm(ticks[0]['t'])} to {_hm(ticks[-1]['t'])}")
+        if _hm(ticks[0]["t"]) > ON_TIME:
+            out.append(f"  LATE START: first reading {_hm(ticks[0]['t'])}, the target is {ON_TIME}")
     else:
         out.append("runner: no index readings today (not started, or no market data)")
     today = [r for r in recs if r.get("asof") == day]
