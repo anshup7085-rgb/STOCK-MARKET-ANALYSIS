@@ -18,7 +18,7 @@ import pandas as pd
 from market.calendar import TradingCalendar
 from market.charges import FNO_ZERODHA, futures_order_costs, option_order_costs
 from market.config import IST
-from trading.fno.explore import (STOP_SLIP, Explorer, Refused, Trigger, build, fire, load_config, quote_problem,
+from trading.fno.explore import (STOP_SLIP, Explorer, _day_figures, Refused, Trigger, build, fire, load_config, quote_problem,
                                  resolve, scoreboard, size, spec_defined)
 from trading.fno.feeds import FnoFeed, MockIntradayFeed
 from trading.fno.model import (ContractMaster, IndexQuote, OptionContract, Quote, futures_from_groww_frame,
@@ -217,6 +217,35 @@ def test_opening_range_breakout_reads_only_readings_already_taken():
     assert "open was not observed" in fire(trig, late, 25100.0, at)[1]
     gap = _ticks([("09:15", 25000), ("09:16", 25040), ("09:17", 24980)])
     assert "not observed through its end" in fire(trig, gap, 25100.0, at)[1]
+
+
+def test_a_late_start_reads_the_open_and_the_opening_range_from_the_exchange():
+    trig = Trigger.parse({"type": "orb", "range_end": "09:30", "buffer_pct": 0.05})
+    day = {"open": 25000.0, "high": 25040.0, "low": 24980.0}
+    late = [dict(t, day=day) for t in _ticks([("09:18", 25010), ("09:28", 25020)])]
+    at = datetime.combine(DAY, time(9, 40), IST)
+    assert fire(trig, late, 25060.0, at) == ("long", "", {"open": 25000.0, "range_high": 25040.0,
+                                                           "range_low": 24980.0, "readings": 2})
+    assert fire(trig, late, 25050.0, at)[0] is None
+    assert fire(trig, late, 24960.0, at)[0] == "short"
+    assert "not observed through its end" in fire(trig, late[:1], 25100.0, at)[1]   # nothing near 09:30
+    mv = Trigger.parse({"type": "move", "pct": 0.5})
+    assert fire(mv, late[:1], 25130.0, datetime.combine(DAY, time(11, 0), IST))[0] == "long"
+    # the exchange's high and low at the last reading before 09:30 win over the sampled readings
+    early = _ticks([("09:15", 25000), ("09:20", 25010), ("09:29", 25005)])
+    early[-1]["day"] = {"open": 25000.0, "high": 25100.0, "low": 24950.0}
+    assert fire(trig, early, 25060.0, at)[0] is None
+
+
+def test_day_figures_are_kept_only_when_they_are_sane():
+    at = datetime.combine(DAY, time(9, 20), IST)
+    good = IndexQuote(25010.0, at, at, 25000.0, 25040.0, 24980.0)
+    assert _day_figures(good, 25010.0) == {"open": 25000.0, "high": 25040.0, "low": 24980.0}
+    assert _day_figures(IndexQuote(25010.0, at, at), 25010.0) is None                       # feed has none
+    assert _day_figures(good, 25050.0) is None                                              # spot above the high
+    pre = datetime.combine(DAY, time(9, 10), IST)
+    assert _day_figures(IndexQuote(25010.0, pre, pre, 25000.0, 25040.0, 24980.0), 25010.0) is None
+    assert _day_figures(IndexQuote(25010.0, None, at, 25000.0, 25040.0, 24980.0), 25010.0) is None
 
 
 def test_move_and_range_triggers():

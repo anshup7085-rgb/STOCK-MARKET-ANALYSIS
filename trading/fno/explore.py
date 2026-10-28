@@ -331,12 +331,46 @@ class Ticks:
 
 # -- triggers --------------------------------------------------------------------------
 
+def _day_figures(index, spot: float) -> dict | None:
+    """The exchange's open, high and low for the session so far, if the reading carries a sane set."""
+    o, h, lo = index.day_open, index.day_high, index.day_low
+    if (index.exchange_ts is None or index.exchange_ts.time() < OPEN or not (o and h and lo)
+            or not lo <= min(o, spot) or not max(o, spot) <= h):
+        return None
+    return {"open": o, "high": h, "low": lo}
+
+
+def _session(ticks: list[dict]) -> list[dict]:
+    return [t for t in ticks if time.fromisoformat(t["t"][11:19]) >= OPEN]
+
+
 def session_open(ticks: list[dict]) -> tuple[float | None, str]:
-    """The day's first index reading, if the runner saw the open (a reading by 09:17)."""
-    first = next((t for t in ticks if time.fromisoformat(t["t"][11:19]) >= OPEN), None)
-    if first is None or time.fromisoformat(first["t"][11:19]) > time(9, 17):
+    """The exchange's opening price if a reading carried it; else the first reading, if taken by 09:17."""
+    sess = _session(ticks)
+    official = next((t["day"]["open"] for t in sess if t.get("day")), None)
+    if official is not None:
+        return float(official), ""
+    if not sess or time.fromisoformat(sess[0]["t"][11:19]) > time(9, 17):
         return None, "the open was not observed (no reading between 09:15 and 09:17)"
-    return float(first["spot"]), ""
+    return float(sess[0]["spot"]), ""
+
+
+def opening_range(ticks: list[dict], end: time, on: date) -> tuple[float, float, int] | None:
+    """(high, low, readings) for 09:15 to `end`: the exchange's day high and low at the last reading
+    before `end`, where readings carry them; else the readings themselves. Either way the last reading
+    must fall within 3 minutes of `end`, or the range was not seen through its end."""
+    before = [t for t in _session(ticks) if time.fromisoformat(t["t"][11:19]) < end]
+    if not before:
+        return None
+    last = time.fromisoformat(before[-1]["t"][11:19])
+    if (datetime.combine(on, end) - datetime.combine(on, last)).total_seconds() > 180:
+        return None
+    if before[-1].get("day"):
+        return float(before[-1]["day"]["high"]), float(before[-1]["day"]["low"]), len(before)
+    if len(before) < 3:
+        return None
+    rng = [float(t["spot"]) for t in before]
+    return max(rng), min(rng), len(rng)
 
 
 def fire(trig: Trigger, ticks: list[dict], spot: float, now: datetime) -> tuple[str | None, str, dict]:
@@ -359,14 +393,11 @@ def fire(trig: Trigger, ticks: list[dict], spot: float, now: datetime) -> tuple[
         return None, f"index {change:+.2f}% from the open, outside {trig.pct}%", ev
     if now.time() < trig.range_end:
         return None, "the opening range is still forming", {}
-    rng = [float(t["spot"]) for t in ticks if OPEN <= time.fromisoformat(t["t"][11:19]) < trig.range_end]
-    last = max((time.fromisoformat(t["t"][11:19]) for t in ticks
-                if time.fromisoformat(t["t"][11:19]) < trig.range_end), default=None)
-    end_dt = datetime.combine(now.date(), trig.range_end)
-    if len(rng) < 3 or last is None or (end_dt - datetime.combine(now.date(), last)).total_seconds() > 180:
+    seen = opening_range(ticks, trig.range_end, now.date())
+    if seen is None:
         return None, "the opening range was not observed through its end", {}
-    hi, lo = max(rng), min(rng)
-    ev = {"open": open_, "range_high": hi, "range_low": lo, "readings": len(rng)}
+    hi, lo, n = seen
+    ev = {"open": open_, "range_high": hi, "range_low": lo, "readings": n}
     if spot > hi * (1 + trig.buffer_pct / 100):
         return "long", "", ev
     if spot < lo * (1 - trig.buffer_pct / 100):
@@ -608,7 +639,7 @@ class Explorer:
                 return rep
             st = self.state()
             master = self._master(st, today, rep)
-            spot = None
+            spot, day = None, None
             try:
                 index = self.feed.index_quote(self.cfg.underlying)
                 age = (now - index.exchange_ts).total_seconds() if index.exchange_ts else None
@@ -616,6 +647,7 @@ class Explorer:
                     rep.alerts.append(f"index reading unusable (exchange timestamp age {age})")
                 else:
                     spot = index.value
+                    day = _day_figures(index, spot)
             except DataUnavailable as exc:
                 rep.alerts.append(f"index unavailable: {str(exc)[:160]}")
             rep.spot = spot
@@ -630,7 +662,8 @@ class Explorer:
             quotes = self._quotes(list(need.values()), [_contract(g) for g in want.values()], rep)
             marks = self._manage(st, now, quotes, rep)
             if spot is not None:
-                self.ticks.append(today, {"t": now.isoformat(), "spot": spot, "marks": marks})
+                self.ticks.append(today, {"t": now.isoformat(), "spot": spot, "marks": marks,
+                                          **({"day": day} if day else {})})
             st = self.state()
             self._day_limit(st, now, quotes, marks, rep)
             st = self.state()

@@ -414,9 +414,14 @@ or one per direction: `{"long": "...", "short": "..."}`.
 | `move` | the index is `pct`% from the open: long or short |
 | `range` | the index is still within `pct`% of the open |
 
-Triggers read only readings the runner has already taken. A trigger that
-needs the open, or the opening range, does not fire if the runner was not
-there to see it.
+Triggers read only readings the runner has already taken. The open and the
+opening range come from the exchange's own day open, high and low, which
+Kite sends with each index reading (a reading's figures are kept only if
+taken after 09:15 and the price sits inside them). So a runner started late
+still knows the open, and still knows the opening range if it took a reading
+within 3 minutes of `range_end`. On a feed without those figures, the open
+is the first reading if it was taken by 09:17, and the range is the readings
+themselves. Otherwise the trigger does not fire.
 
 **How a trade is decided, every pass (one a minute).**
 

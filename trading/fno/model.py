@@ -238,6 +238,9 @@ class IndexQuote:
     value: float
     exchange_ts: datetime | None
     fetched_at: datetime
+    day_open: float | None = None     # the exchange's own figures for the day so far, where the feed gives them
+    day_high: float | None = None
+    day_low: float | None = None
 
     def as_dict(self) -> dict:
         return {"value": self.value,

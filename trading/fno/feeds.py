@@ -182,7 +182,9 @@ class KiteFnoFeed(FnoFeed):
             raise DataUnavailable(f"Kite quote for {key} failed: {exc}") from exc
         if not d or not d.get("last_price"):
             raise DataUnavailable(f"Kite returned no value for {key}")
-        return IndexQuote(float(d["last_price"]), as_ist(d.get("timestamp")), datetime.now(IST))
+        ohlc = d.get("ohlc") or {}
+        o, h, lo = (float(ohlc[k]) if ohlc.get(k) else None for k in ("open", "high", "low"))
+        return IndexQuote(float(d["last_price"]), as_ist(d.get("timestamp")), datetime.now(IST), o, h, lo)
 
     def quotes(self, contracts: list[OptionContract]) -> dict[str, Quote]:
         out: dict[str, Quote] = {}
