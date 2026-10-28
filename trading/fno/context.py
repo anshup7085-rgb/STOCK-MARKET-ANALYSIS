@@ -12,9 +12,14 @@ Sources (public, no login):
   participant_oi   nsearchives .../content/nsccl/fao_participant_oi_DDMMYYYY.csv
   index_close      nsearchives .../content/indices/ind_close_all_DDMMYYYY.csv   (India VIX, NIFTY 50)
   fo_bhavcopy      nsearchives .../content/fo/BhavCopy_NSE_FO_0_0_0_YYYYMMDD_F_0000.csv.zip
-  fii_dii_cash     nseindia.com/api/fiidiiTradeReact   (the latest session only: it cannot be
-                                                         fetched for an earlier day, so a missed
-                                                         day stays unavailable)
+  fii_dii_cash     nseindia.com/api/fiidiiTradeReact   (the latest session only, and never kept
+                                                         by NSE: it is fetched once a run, filed
+                                                         under the session it names, and its raw
+                                                         reply is kept. The morning run catches
+                                                         the previous session's flows)
+
+The small files are kept raw under raw/DAY/, so a parser fixed later can re-read them. The
+F&O file is not kept (NSE's archive keeps it); its SHA-256 is.
 """
 
 from __future__ import annotations
@@ -51,14 +56,14 @@ class Unavailable(Exception):
 
 # -- fetching --------------------------------------------------------------------------
 
-def fetch_url(url: str, timeout: float = 30.0) -> bytes:
+def fetch_url(url: str, timeout: float = 20.0) -> bytes:
     try:
         return urllib.request.urlopen(urllib.request.Request(url, headers=HEADERS), timeout=timeout).read()
     except Exception as exc:                                    # noqa: BLE001 - recorded as the reason
         raise Unavailable(f"{type(exc).__name__}: {str(exc)[:120]}") from exc
 
 
-def fetch_fii_dii(timeout: float = 30.0) -> bytes:
+def fetch_fii_dii(timeout: float = 15.0) -> bytes:
     """NSE wants a browser-like visit first (cookies), then the API call with a referer."""
     opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(CookieJar()))
     try:
@@ -168,36 +173,36 @@ def parse_bhavcopy(raw: bytes, day: date, underlying: str = "NIFTY") -> dict:
     return out
 
 
-def parse_fii_dii(raw: bytes, day: date) -> dict:
-    """The cash-market FII/DII flows in Rs crore. Only the latest session is served: any other
-    date than `day` is a refusal, not a guess."""
+def parse_fii_dii(raw: bytes) -> tuple[date, dict]:
+    """(the session NSE's reply names, its cash-market FII/DII flows in Rs crore). NSE serves only
+    its latest session, so the reply is filed under the date it states, never under the run's day."""
     try:
         items = json.loads(raw)
     except json.JSONDecodeError as exc:
-        raise Unavailable(f"not JSON: {exc}") from exc
-    out = {}
+        raise Unavailable(f"not JSON: {str(exc)[:80]}") from exc
+    out, seen = {}, set()
     for it in items if isinstance(items, list) else []:
         cat = str(it.get("category", "")).upper()
         who = "fii" if cat.startswith("FII") else "dii" if cat.startswith("DII") else None
         if who is None:
             continue
         try:
-            shown = datetime.strptime(str(it.get("date")), "%d-%b-%Y").date()
+            seen.add(datetime.strptime(str(it.get("date")), "%d-%b-%Y").date())
         except ValueError:
             raise Unavailable(f"unreadable date {it.get('date')!r}") from None
-        if shown != day:
-            raise Unavailable(f"the API serves {shown}; flows for {day} cannot be fetched later")
         out[who] = {"buy": _num(it.get("buyValue")), "sell": _num(it.get("sellValue")),
                     "net": _num(it.get("netValue"))}
     if not {"fii", "dii"} <= set(out):
         raise Unavailable("FII/DII rows not found")
-    return out
+    if len(seen) != 1:
+        raise Unavailable(f"the FII and DII rows name different dates: {sorted(seen)}")
+    return seen.pop(), out
 
 
-PARSERS: dict[str, Callable[[bytes, date], dict]] = {
-    "participant_oi": parse_participant_oi, "index_close": parse_index_close,
-    "fo_bhavcopy": parse_bhavcopy, "fii_dii_cash": parse_fii_dii,
+PARSERS: dict[str, Callable[[bytes, date], dict]] = {          # the dated archive files
+    "participant_oi": parse_participant_oi, "index_close": parse_index_close, "fo_bhavcopy": parse_bhavcopy,
 }
+KEEP_RAW = {"participant_oi": "csv", "index_close": "csv", "fii_dii_cash": "json"}
 
 
 # -- the record ----------------------------------------------------------------------------
@@ -218,39 +223,86 @@ def _write(path: Path, rec: dict) -> None:
     os.replace(tmp, path)
 
 
-def record_day(root: Path, day: date, fetch: Callable[[str, date], bytes], now: datetime | None = None) -> dict:
-    """Fetch every source not yet recorded OK for `day` and save the day's file. Sources already
-    recorded OK are kept as they are (never refetched, never changed)."""
+def _keep_raw(root: Path, day: date, name: str, raw: bytes) -> None:
+    if name in KEEP_RAW:
+        p = context_dir(root) / "raw" / day.isoformat() / f"{name}.{KEEP_RAW[name]}"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(raw)
+
+
+def _ok(raw: bytes, data: dict, now: datetime) -> dict:
+    return {"status": "ok", "sha256": hashlib.sha256(raw).hexdigest(), "bytes": len(raw),
+            "at": now.isoformat(timespec="seconds"), "data": data}
+
+
+def record_day(root: Path, day: date, fetch: Callable[[str, date], bytes], now: datetime | None = None,
+               flows: tuple | None = None) -> dict:
+    """Fetch each archive file not yet recorded OK for `day` and save the day's record. `flows` is this
+    run's one FII/DII reply: ("ok", session, data, raw) or ("unavailable", reason), or None if it was not
+    fetched. Sources already recorded OK are kept as they are: never refetched, never changed."""
     now = now or datetime.now(IST)
     rec = read_day(root, day) or {"day": day.isoformat(), "sources": {}}
-    for name in SOURCES:
-        if rec["sources"].get(name, {}).get("status") == "ok":
+    src = rec["sources"]
+    for name, parse in PARSERS.items():
+        if src.get(name, {}).get("status") == "ok":
             continue
         try:
             raw = fetch(name, day)
-            data = PARSERS[name](raw, day)
-            rec["sources"][name] = {"status": "ok", "sha256": hashlib.sha256(raw).hexdigest(),
-                                    "bytes": len(raw), "at": now.isoformat(timespec="seconds"), "data": data}
+            src[name] = _ok(raw, parse(raw, day), now)
+            _keep_raw(root, day, name, raw)
         except Unavailable as exc:
-            rec["sources"][name] = {"status": "unavailable", "reason": str(exc)[:200],
-                                    "at": now.isoformat(timespec="seconds")}
+            src[name] = {"status": "unavailable", "reason": str(exc)[:200], "at": now.isoformat(timespec="seconds")}
+    if src.get("fii_dii_cash", {}).get("status") != "ok":
+        if flows and flows[0] == "ok" and flows[1] == day:
+            src["fii_dii_cash"] = _ok(flows[3], flows[2], now)
+            _keep_raw(root, day, "fii_dii_cash", flows[3])
+        else:
+            why = ("not fetched" if flows is None else flows[1] if flows[0] == "unavailable"
+                   else f"NSE now serves {flows[1]} only; this day's flows were not caught while served")
+            src["fii_dii_cash"] = {"status": "unavailable", "reason": str(why)[:200],
+                                   "at": now.isoformat(timespec="seconds")}
     _write(context_dir(root) / f"{day}.json", rec)
     return rec
 
 
-def default_fetch(name: str, day: date) -> bytes:
+def default_fetch(name: str, day: date | None) -> bytes:
     return fetch_fii_dii() if name == "fii_dii_cash" else fetch_url(URLS[name].format(d=day))
+
+
+def trading_days_back(today: date, n: int, cal) -> list[date]:
+    """The last `n` trading days up to and including `today`, oldest first."""
+    out, d = [], today
+    while len(out) < n and (today - d).days < 7 * n + 14:
+        if cal.is_trading_day(d):
+            out.append(d)
+        d -= timedelta(days=1)
+    return out[::-1]
 
 
 def record_recent(root: Path, today: date, days: int = 5, fetch=default_fetch, now: datetime | None = None,
                   calendar=None) -> list[dict]:
-    """Today and the previous `days - 1` calendar days that were trading days, oldest first."""
-    cal = calendar or load_calendar()
-    days_list = [d for k in range(days) if cal.is_trading_day(d := today - timedelta(days=k))][::-1]
-    return [record_day(root, d, fetch, now) for d in days_list]
+    """The last `days` trading days up to today, oldest first. The FII/DII reply is fetched once."""
+    span = trading_days_back(today, days, calendar or load_calendar())
+    flows = None
+    if any((read_day(root, d) or {}).get("sources", {}).get("fii_dii_cash", {}).get("status") != "ok" for d in span):
+        try:
+            raw = fetch("fii_dii_cash", None)
+            session, data = parse_fii_dii(raw)
+            flows = ("ok", session, data, raw)
+        except Unavailable as exc:
+            flows = ("unavailable", str(exc))
+    return [record_day(root, d, fetch, now, flows) for d in span]
 
 
 # -- one screen ------------------------------------------------------------------------------
+
+def _g(v) -> str:
+    return "n/a" if v is None else f"{v:g}"
+
+
+def _signed(v) -> str:
+    return "n/a" if v is None else f"{v:+,.0f}"
+
 
 def summary(rec: dict | None) -> list[str]:
     if not rec:
@@ -267,14 +319,13 @@ def summary(rec: dict | None) -> list[str]:
             out.append(f"  FII index futures: long {fut_l:,.0f}, short {fut_s:,.0f}, long share {fut_l / (fut_l + fut_s):.0%}")
     vix = s.get("index_close", {}).get("data", {}).get("vix")
     if vix:
-        out.append(f"  India VIX {vix['close']:.2f} ({vix['change_pct']:+.2f}%)" if vix["change_pct"] is not None
-                   else f"  India VIX {vix['close']:.2f}")
+        out.append(f"  India VIX {_g(vix['close'])}" + (f" ({vix['change_pct']:+.2f}%)" if vix["change_pct"] is not None else ""))
     bh = s.get("fo_bhavcopy", {}).get("data")
     if bh:
         near = bh["expiries"][bh["nearest_expiry"]]
         out.append(f"  NIFTY {bh['nearest_expiry']} options: put-call OI {near['pcr_oi']}, "
-                   f"biggest call OI at {near['max_call_oi_strike']:g}, biggest put OI at {near['max_put_oi_strike']:g}")
+                   f"biggest call OI at {_g(near['max_call_oi_strike'])}, biggest put OI at {_g(near['max_put_oi_strike'])}")
     fl = s.get("fii_dii_cash", {}).get("data")
     if fl:
-        out.append(f"  cash flows Rs crore: FII {fl['fii']['net']:+,.0f}, DII {fl['dii']['net']:+,.0f}")
+        out.append(f"  cash flows Rs crore: FII {_signed(fl['fii']['net'])}, DII {_signed(fl['dii']['net'])}")
     return out or ["  nothing recorded"]

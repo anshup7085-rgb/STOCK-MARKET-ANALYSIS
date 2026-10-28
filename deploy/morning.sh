@@ -22,6 +22,11 @@ main() {   # parsed whole before it runs, so the pull below cannot change it mid
   set +a
   eval "$(.venv/bin/python tools/kite_session.py --eval)"
   deploy/fno_day.sh "$@"
+  # The previous session's FII/DII flows are served only until NSE's next update, so catch them now,
+  # in the background (the runners are already up), without the Kite login in its environment.
+  mkdir -p logs
+  env -u KITE_ACCESS_TOKEN -u KITE_API_KEY PYTHONPATH=. setsid nohup timeout 300 \
+    .venv/bin/python tools/record_context.py >>"logs/context-$(date +%F).log" 2>&1 </dev/null &
   echo
   echo "All set. You can close this window and switch off your laptop or phone."
 }

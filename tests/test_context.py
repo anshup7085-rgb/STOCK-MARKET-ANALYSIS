@@ -14,8 +14,9 @@ from datetime import date, datetime
 from pathlib import Path
 
 from market.config import IST
-from trading.fno.context import (SOURCES, Unavailable, parse_bhavcopy, parse_fii_dii, parse_index_close,
-                                 parse_participant_oi, read_day, record_day, summary)
+from market.calendar import TradingCalendar
+from trading.fno.context import (SOURCES, Unavailable, context_dir, parse_bhavcopy, parse_fii_dii, parse_index_close,
+                                 parse_participant_oi, read_day, record_day, record_recent, summary, trading_days_back)
 
 DAY = date(2026, 10, 28)
 NOW = datetime(2026, 10, 28, 19, 0, tzinfo=IST)
@@ -95,54 +96,85 @@ def test_bhavcopy_gives_put_call_ratios_and_biggest_strikes_for_nifty_only():
         pass
 
 
-def test_fii_dii_cash_is_refused_for_any_other_day():
-    d = parse_fii_dii(FIIDII, DAY)
-    assert d["fii"]["net"] == -2500 and d["dii"]["net"] == 2000.5
-    try:
-        parse_fii_dii(FIIDII, date(2026, 10, 27))
-        raise AssertionError("served flows for a day the API no longer holds")
-    except Unavailable as exc:
-        assert "cannot be fetched later" in str(exc)
-    try:
-        parse_fii_dii(b"<html>blocked</html>", DAY)
-        raise AssertionError("accepted a non-JSON page")
-    except Unavailable:
-        pass
+def test_fii_dii_cash_is_filed_under_the_session_the_reply_names():
+    session, d = parse_fii_dii(FIIDII)
+    assert session == DAY and d["fii"]["net"] == -2500 and d["dii"]["net"] == 2000.5
+    mixed = FIIDII.replace(b'"date": "28-Oct-2026", "buyValue": "6000"', b'"date": "27-Oct-2026", "buyValue": "6000"')
+    for bad in (b"<html>blocked</html>", mixed, b"[]"):
+        try:
+            parse_fii_dii(bad)
+            raise AssertionError(f"accepted {bad[:30]!r}")
+        except Unavailable:
+            pass
+
+
+ARCHIVE = {"participant_oi": PARTICIPANT, "index_close": INDEX, "fo_bhavcopy": _bhav()}
 
 
 def test_a_day_is_recorded_source_by_source_and_ok_sources_are_never_refetched():
     root = Path(tempfile.mkdtemp())
     calls = []
-    files = {"participant_oi": PARTICIPANT, "index_close": INDEX, "fo_bhavcopy": _bhav()}
+    files = dict(ARCHIVE)
 
     def fetch(name, day):
         calls.append(name)
-        if name == "fii_dii_cash":
-            raise Unavailable("HTTPError: 403")
         return files[name]
 
-    rec = record_day(root, DAY, fetch, NOW)
+    rec = record_day(root, DAY, fetch, NOW, ("unavailable", "HTTPError: 403"))
     assert [rec["sources"][n]["status"] for n in SOURCES] == ["ok", "ok", "ok", "unavailable"]
     assert rec["sources"]["fii_dii_cash"]["reason"] == "HTTPError: 403"
     assert len(rec["sources"]["participant_oi"]["sha256"]) == 64
+    raw = context_dir(root) / "raw" / DAY.isoformat()
+    assert (raw / "participant_oi.csv").read_bytes() == PARTICIPANT and (raw / "index_close.csv").exists()
+    assert not list(raw.glob("fo_bhavcopy*"))                               # NSE's archive keeps that one
     first = json.dumps(rec["sources"]["participant_oi"], sort_keys=True)
     calls.clear()
     files["participant_oi"] = b"changed"                                    # would fail to parse if it were refetched
-    rec = record_day(root, DAY, lambda n, d: FIIDII if n == "fii_dii_cash" else fetch(n, d), NOW)
+    rec = record_day(root, DAY, fetch, NOW, ("ok", DAY, parse_fii_dii(FIIDII)[1], FIIDII))
     assert calls == [] and rec["sources"]["fii_dii_cash"]["status"] == "ok"
+    assert (raw / "fii_dii_cash.json").read_bytes() == FIIDII
     assert json.dumps(rec["sources"]["participant_oi"], sort_keys=True) == first       # untouched
     assert read_day(root, DAY) == rec
 
 
+def test_flows_for_another_session_are_never_filed_under_this_day():
+    root = Path(tempfile.mkdtemp())
+    other = date(2026, 10, 27)
+    rec = record_day(root, DAY, lambda n, d: ARCHIVE[n], NOW, ("ok", other, {"fii": {}, "dii": {}}, b"x"))
+    assert rec["sources"]["fii_dii_cash"]["status"] == "unavailable" and "2026-10-27" in rec["sources"]["fii_dii_cash"]["reason"]
+    assert record_day(root, DAY, lambda n, d: ARCHIVE[n], NOW)["sources"]["fii_dii_cash"]["reason"] == "not fetched"
+
+
+def test_a_run_fetches_the_flows_once_and_files_them_under_their_session():
+    root = Path(tempfile.mkdtemp())
+    cal = TradingCalendar(holidays={"2026-10-26": "a holiday"})
+    calls = []
+
+    def fetch(name, day):
+        calls.append((name, day))
+        if name == "fii_dii_cash":
+            return FIIDII.replace(b"28-Oct-2026", b"27-Oct-2026")             # the morning after: yesterday's flows
+        return ARCHIVE[name].replace(b"28-10-2026", day.strftime("%d-%m-%Y").encode())
+
+    assert trading_days_back(date(2026, 10, 28), 3, cal) == [date(2026, 10, 23), date(2026, 10, 27), date(2026, 10, 28)]
+    recs = record_recent(root, date(2026, 10, 28), 3, fetch, NOW, cal)
+    assert [r["day"] for r in recs] == ["2026-10-23", "2026-10-27", "2026-10-28"]
+    assert sum(1 for n, _ in calls if n == "fii_dii_cash") == 1
+    got = {r["day"]: r["sources"]["fii_dii_cash"]["status"] for r in recs}
+    assert got == {"2026-10-23": "unavailable", "2026-10-27": "ok", "2026-10-28": "unavailable"}
+    calls.clear()
+    record_recent(root, date(2026, 10, 28), 3, fetch, NOW, cal)
+    assert ("fii_dii_cash", None) in calls and not any(n != "fii_dii_cash" for n, _ in calls)   # archive files done
+
+
 def test_the_summary_reports_what_is_missing_and_never_fills_it_in():
     root = Path(tempfile.mkdtemp())
-    rec = record_day(root, DAY, lambda n, d: (_ for _ in ()).throw(Unavailable("down")), NOW)
+    rec = record_day(root, DAY, lambda n, d: (_ for _ in ()).throw(Unavailable("down")), NOW, ("unavailable", "down"))
     text = "\n".join(summary(rec))
     assert text.count("unavailable") == 4 and "VIX" not in text
     assert summary(None) == ["not recorded yet"]
-    full = record_day(Path(tempfile.mkdtemp()), DAY,
-                      lambda n, d: {"participant_oi": PARTICIPANT, "index_close": INDEX, "fo_bhavcopy": _bhav(),
-                                    "fii_dii_cash": FIIDII}[n], NOW)
+    full = record_day(Path(tempfile.mkdtemp()), DAY, lambda n, d: ARCHIVE[n], NOW,
+                      ("ok", DAY, parse_fii_dii(FIIDII)[1], FIIDII))
     s = "\n".join(summary(full))
     assert "long share 25%" in s and "India VIX 13.25" in s and "put-call OI 1.5" in s and "FII -2,500" in s
 

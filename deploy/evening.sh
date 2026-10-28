@@ -6,6 +6,7 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 git pull -q --ff-only 2>/dev/null || true
-# today's public market context (FII/DII, VIX, put-call ratio); a source not yet published is retried next time
-PYTHONPATH=. .venv/bin/python tools/record_context.py >/dev/null 2>&1 || echo "(market context not recorded)"
+# the public market context (FII/DII, VIX, put-call ratio); a file not yet published is retried next time
+echo "recording the market context (at most 4 minutes)..."
+PYTHONPATH=. timeout 240 .venv/bin/python tools/record_context.py 2>/dev/null || echo "(market context not recorded this time; it is retried tomorrow)"
 PYTHONPATH=. .venv/bin/python tools/day_report.py "$@"
