@@ -179,6 +179,60 @@ def test_the_summary_reports_what_is_missing_and_never_fills_it_in():
     assert "long share 25%" in s and "India VIX 13.25" in s and "put-call OI 1.5" in s and "FII -2,500" in s
 
 
+def _backfill(tmp):
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("backfill_context", Path(__file__).resolve().parents[1] / "tools" / "backfill_context.py")
+    bf = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(bf)
+    bf.ROOT = Path(tmp)
+    return bf
+
+
+AFTER_HOURS = lambda: datetime(2026, 10, 28, 20, 0, tzinfo=IST)            # noqa: E731
+
+
+def test_backfill_saves_files_lists_what_nse_lacks_and_resumes_without_refetching():
+    bf = _backfill(tempfile.mkdtemp())
+    calls = []
+
+    def fetcher(path):
+        calls.append(path)
+        if "02012012" in path:
+            raise bf.NotThere("HTTP 404")                               # a holiday
+        if "ind_close" in path and "03012012" in path:
+            return b"<html>error page</html>"                           # not the file: listed as missing
+        return INDEX if "ind_close" in path else PARTICIPANT
+
+    res = bf.run(date(2012, 1, 2), date(2012, 1, 4), False, fetcher, lambda s: None, AFTER_HOURS)
+    assert not res["stopped"] and res["got"] == {"participant_oi": 2, "participant_vol": 2, "index_close": 1}
+    missing = json.loads((bf.ROOT / "missing.json").read_text())
+    assert missing["participant_oi"] == ["2012-01-02"] and missing["index_close"] == ["2012-01-02", "2012-01-03"]
+    assert bf.file_path("participant_oi", date(2012, 1, 3)).read_bytes() == PARTICIPANT
+    lines = (bf.ROOT / "manifest.jsonl").read_text().splitlines()
+    assert len(lines) == 5 and all(len(json.loads(x)["sha256"]) == 64 for x in lines)
+    calls.clear()
+    bf.run(date(2012, 1, 2), date(2012, 1, 4), False, fetcher, lambda s: None, AFTER_HOURS)
+    assert calls == []                                                  # saved and missing days are not asked again
+    assert "participant_oi: 2 days, 2012-01-03 to 2012-01-04" in "\n".join(bf.summary())
+
+
+def test_backfill_stops_after_five_refusals_in_a_row_and_keeps_out_of_vs_settlement_window():
+    bf = _backfill(tempfile.mkdtemp())
+    waits = []
+
+    def refuse(path):
+        raise bf.Refused("HTTP 403")
+
+    res = bf.run(date(2012, 1, 2), date(2012, 1, 2), False, refuse, waits.append, AFTER_HOURS)
+    assert res["stopped"] and waits.count(bf.PAUSE_S) == bf.MAX_REFUSALS - 1
+    waits.clear()
+    bf.quiet_hours(waits.append, lambda: datetime(2026, 11, 3, 16, 0, tzinfo=IST))
+    assert waits == [5400.0]                                            # 16:00 -> 17:30
+    waits.clear()
+    bf.quiet_hours(waits.append, AFTER_HOURS)
+    assert waits == []
+
+
 if __name__ == "__main__":
     import sys
     import traceback

@@ -12,13 +12,13 @@ useful, not yet · **SKIP** not worth it.
 | What | Why it can help | Source and cost | Status |
 |---|---|---|---|
 | NSE daily F&O file: every NIFTY option and future, its close and open interest, 2018 on | Tests weekly and end-of-day strategies on 8 years instead of waiting | NSE archive, free. **Checked**: 18 dates, April 2018 to October 2026. Weekly NIFTY options exist from 2019 | HAVE (settlement, recorder); NEXT for a past-data test |
-| FII, DII, pro and client positions in index futures and options | Where the big players stand | NSE archive, free | Recorded daily since 28 Oct; how far back the archive goes: NOW (`tools/context_history_check.py`) |
-| India VIX | When selling options is dangerous | NSE's index file (free); Kite minute data | Recorded daily; history: NOW |
-| FII and DII cash flows | Money moving in or out of shares | NSE, latest day only; NSDL keeps FPI history from June 2014 (**reported**) | Recorded daily (morning and evening); history: LATER |
+| FII, DII, pro and client positions in index futures and options | Where the big players stand | NSE archive, free. **Checked**: participant-wise open interest and volume back to April 2012 | Recorded daily since 28 Oct; history: NOW (`deploy/backfill.sh`) |
+| India VIX | When selling options is dangerous | NSE's index file, free. **Checked**: in it from October 2014 (not in the 2012–2014 files). Kite minute data too | Recorded daily; history: NOW (`deploy/backfill.sh`) |
+| FII and DII cash flows | Money moving in or out of shares | NSE, latest day only; NSDL keeps FPI history from June 2014 (**reported**); NSE's FII derivatives statistics file: **checked** back to 2015 | Recorded daily (morning and evening); history: LATER |
 | Put-call ratio and the biggest open-interest strikes | Where option sellers have placed their bets | From NSE's daily F&O file | Recorded daily |
 | NIFTY and VIX minute candles for years | Replays our intraday triggers and futures strategies | Kite historical API, inside the ₹500 a month plan; 60 days a request; back to 2015 (**reported**) | NOW: one-time Kite check runs with the next `morning` |
 | Minute candles of options listed now, with open interest | Our own minute-level option history, from now on | Kite, included; expired options are not served (**reported**, checked by the Kite check) | NEXT: download every contract before it expires |
-| Minute candles of **expired** options, years back | Tests the intraday option strategies on years instead of months: the biggest speed-up for the intraday goal | **Dhan Data API**, ₹499 + GST a month: 5 years, minute OHLC, volume, open interest, IV and spot, strikes ATM ± 10 for index options near expiry, 31 days a request (**reported**). Others: ICICI Breeze (free with an ICICI Direct account; depth unclear, **reported**), Upstox Plus (expired-contract API, short minute lookback, **reported**), TrueData and Global Datafeeds (paid, prices on request), a free Zenodo set of 1-minute NIFTY options for 2017 to 2020 (unknown author) | NEXT: one month of Dhan after the Kite check, if you agree |
+| Minute candles of **expired** options, years back | Tests the intraday option strategies on years instead of months: the biggest speed-up for the intraday goal | **Dhan Data API** (Dhan: a SEBI-registered broker, INZ000006031 per its own pages, live since November 2021), ₹499 + GST a month: 5 years, minute OHLC, volume, open interest, IV and spot, strikes ATM ± 10 for index options near expiry, 31 days a request (**reported**). Others: ICICI Breeze (free with an ICICI Direct account; depth unclear, **reported**), Upstox Plus (expired-contract API, short minute lookback, **reported**), TrueData and Global Datafeeds (paid, prices on request), a free Zenodo set of 1-minute NIFTY options for 2017 to 2020 (unknown author) | NEXT: the holder agreed (28 Oct). One month, kept only if it matches NSE's closes and our own recorded quotes on the first day; no independent audit of its data was found, and users report gaps in other Dhan data |
 | Tick-by-tick data and full market depth | Only for strategies faster than ours | Paid vendors | SKIP for now |
 | GIFT Nifty and global cues (US index futures, crude, dollar-rupee, US yields) | Overnight direction and gap risk | Free daily sources | LATER (cheap) |
 | Results dates of NIFTY's biggest companies | Results days move the index | Public calendars | NOW: step 3 |
@@ -40,7 +40,7 @@ useful, not yet · **SKIP** not worth it.
 
 | What | Why | Status |
 |---|---|---|
-| Copy of `state/` off the server | The journals are the evidence, and today they live on one machine | NEXT |
+| Copy of `state/` off the server | The journals are the evidence | HAVE: Lightsail automatic snapshots, daily at 22:30 IST, last seven kept (enabled 28 Oct). An off-AWS copy: LATER |
 | A fixed (static) IP for live orders | Required for API orders from 1 April 2026 (Zerodha support page). A Lightsail static IP is free while attached; it is then entered in the Kite developer profile | Before live |
 | Phone-tap confirmation of each live order | You stay in control | Before live |
 | An alert when a runner stops during the day | Today it is noticed only in the evening | LATER |
@@ -57,8 +57,9 @@ useful, not yet · **SKIP** not worth it.
 
 ## 5. Knowledge
 
-- **Zerodha Varsity** (free): Options Theory, Option Strategies, Trading Systems, and Risk Management and
-  Trading Psychology. The best use of an hour a day while the tests run.
+- **Zerodha Varsity** (free): Options Theory, Option Strategies, Trading Systems, Risk Management and
+  Trading Psychology. Optional for the holder (studies come first): the system does not need it, and each
+  strategy is explained in plain words before any money goes near it.
 - Your cousin's real trades, set beside our results.
 
 ## Not worth it
