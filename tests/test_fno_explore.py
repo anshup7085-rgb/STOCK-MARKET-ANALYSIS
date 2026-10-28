@@ -644,6 +644,19 @@ def test_the_mock_lists_monthly_futures_priced_with_carry_and_a_tight_spread():
     assert qf.bid > spot and qf.ask - qf.bid < 2.0
 
 
+def test_the_what_if_book_trades_every_signal_at_one_unit_and_leaves_the_explorer_config_alone():
+    from trading.fno.explore_cli import DEFAULT_CONFIG, whatif_config
+    import json
+    raw = json.loads(Path(DEFAULT_CONFIG).read_text())
+    before = json.dumps(raw, sort_keys=True)
+    wi = load_config(whatif_config(raw))
+    assert json.dumps(raw, sort_keys=True) == before                      # the explorer's own config is untouched
+    assert all(s.max_units == 1 and s.risk_budget >= 1e9 for s in wi.strategies)
+    assert wi.max_open >= len(wi.strategies) and wi.daily_loss_limit >= 1e9 and wi.capital >= 1e9
+    assert [s.name for s in wi.strategies] == [s.name for s in load_config(raw).strategies]
+    assert wi.sha != load_config(raw).sha
+
+
 if __name__ == "__main__":
     import sys
     import traceback

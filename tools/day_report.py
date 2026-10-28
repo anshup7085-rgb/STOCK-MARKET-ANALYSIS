@@ -24,6 +24,7 @@ from trading.journal import Journal, verify_file
 
 REPO = Path(os.environ.get("FNO_REPORT_ROOT") or Path(__file__).resolve().parents[1])   # the override is for tests
 EXPLORE, V = REPO / "state" / "fno_explore", REPO / "state" / "paper_fno"
+WHATIF = REPO / "state" / "fno_whatif"
 ON_TIME = "09:10"                                    # the agreed latest start
 ERROR_WORDS = ("Traceback", "Error", "[refused]", "failed", "pass failed")
 
@@ -73,6 +74,25 @@ def explorer(day: str) -> list[str]:
     return out
 
 
+def whatif(day: str) -> list[str]:
+    """The what-if book: every signal at 1 unit, no limits. Not the test; it answers "what if"."""
+    path = WHATIF / "journal.jsonl"
+    if not path.exists():
+        return ["no what-if book yet"]
+    today = [r for r in Journal(path, "fno-explore").records() if r.get("asof") == day]
+    out, nets = [], defaultdict(float)
+    for r in today:
+        p = r["payload"]
+        if r["type"] == "XP_EXIT":
+            name = p["id"].rsplit("-", 4)[0]
+            nets[name] += p["net"]
+            out.append(f"  {_hm(p['t'])} {name} ({p['reason']}): net Rs{p['net']:+,.0f}")
+    opened = sum(r["type"] == "XP_ENTRY" for r in today)
+    out.append(f"if every signal had been traded at 1 lot: {opened} trades, net Rs{sum(nets.values()):+,.0f}"
+               + ("  (" + ", ".join(f"{k} {v:+,.0f}" for k, v in sorted(nets.items())) + ")" if nets else ""))
+    return out
+
+
 def strategy_v(day: str) -> list[str]:
     path = V / "journal.jsonl"
     if not path.exists():
@@ -111,10 +131,12 @@ def main() -> int:
     print(f"=== F&O paper report for {day} (written {datetime.now(IST):%d %b %H:%M} IST) — paper only ===")
     print("\n--- intraday explorer ---")
     print("\n".join(explorer(day)))
+    print("\n--- what-if (every signal, 1 lot, no budget or position limits; not the test) ---")
+    print("\n".join(whatif(day)))
     print("\n--- strategy V ---")
     print("\n".join(strategy_v(day)))
     print("\n--- journals ---")
-    for name, d in (("explorer", EXPLORE), ("V", V)):
+    for name, d in (("explorer", EXPLORE), ("what-if", WHATIF), ("V", V)):
         p = d / "journal.jsonl"
         if p.exists():
             vr = verify_file(p)

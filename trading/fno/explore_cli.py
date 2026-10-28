@@ -42,6 +42,23 @@ def state_dir() -> Path:
     return REPO_ROOT / "state" / "fno_explore"
 
 
+def whatif_dir() -> Path:
+    return REPO_ROOT / "state" / "fno_whatif"
+
+
+def whatif_config(raw: dict) -> dict:
+    """The what-if book: the same strategies at one unit each, with no risk budget, position, margin
+    or day-loss limit, so every signal trades. It answers "what if every trade had been taken";
+    it is not the explorer's record and never feeds its screen."""
+    out = json.loads(json.dumps(raw))
+    out["note"] = "WHAT-IF: every strategy at 1 unit, no budget, position, margin or loss limit"
+    out.update(capital=1e12, daily_loss_limit=1e12, max_margin_frac=1.0,
+               max_open=max(1, len(out.get("strategies", []))))
+    for d in out.get("strategies", []):
+        d.update(risk_budget=1e12, max_units=1)
+    return out
+
+
 def _feed(name: str, clock=None):
     if name == "mock":
         from trading.fno.feeds import MockIntradayFeed
@@ -125,11 +142,26 @@ def cmd_pass(args) -> int:
     return 0
 
 
+def _whatif(ex: Explorer) -> Explorer | None:
+    """The what-if book on the explorer's own feed (one quote rate limit for both), or None if it
+    cannot start: it must never stop the explorer."""
+    try:
+        wi = Explorer(ex.feed, whatif_dir(), load_config(whatif_config(ex.cfg.raw)))
+        if not wi.journal.records():
+            wi.init()
+        return wi
+    except Exception as exc:
+        print(f"[what-if failed to start] {type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
+        return None
+
+
 def cmd_run(args) -> int:
     ex = _explorer(args)
+    wi = _whatif(ex) if args.whatif else None
     until = time.fromisoformat(args.until)
     print(f"explorer running: one pass every {args.every}s until {until:%H:%M}. Ctrl-C stops it; "
-          f"open positions are then closed at the next run's first pass or booked at their last mark.")
+          f"open positions are then closed at the next run's first pass or booked at their last mark."
+          + (" A what-if book (every signal, 1 unit, no limits) runs alongside." if wi else ""))
     while datetime.now(IST).time() < until:
         try:
             rep = ex.run_pass()
@@ -139,6 +171,13 @@ def cmd_run(args) -> int:
             print(f"[busy] {exc}", file=sys.stderr)
         except Exception as exc:                               # a bad pass must not end the day's management
             print(f"[pass failed] {type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
+        if wi is not None:
+            try:
+                rep = wi.run_pass()
+                if rep.entries or rep.exits:
+                    print("[what-if] " + rep.text().replace("\n", "\n[what-if] "), flush=True)
+            except Exception as exc:
+                print(f"[what-if pass failed] {type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
         now = _time.time()
         _time.sleep(args.every - now % args.every + 2)
     print(format_scoreboard(scoreboard(ex.journal.records())))
@@ -216,6 +255,8 @@ def add_explore(fs) -> None:
     q = xs.add_parser("run"); common(q)
     q.add_argument("--every", type=int, default=60)
     q.add_argument("--until", default="15:30")
+    q.add_argument("--no-whatif", dest="whatif", action="store_false",
+                   help="do not run the what-if book (every signal at 1 unit, no limits) alongside")
     q.set_defaults(fn=cmd_run)
     q = xs.add_parser("status"); q.set_defaults(fn=cmd_status)
     q = xs.add_parser("report"); q.add_argument("--json", dest="json_out", default=None)
