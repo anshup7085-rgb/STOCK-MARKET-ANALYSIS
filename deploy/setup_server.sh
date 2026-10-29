@@ -121,7 +121,7 @@ done
 #    so a risk override in your shell cannot fail (or pass) them
 say "running the test suites"
 for t in tests/test_offline.py tests/test_trading.py tests/test_research.py tests/test_round2.py \
-         tests/test_fno.py tests/test_fno_explore.py tests/test_context.py; do
+         tests/test_fno.py tests/test_fno_explore.py tests/test_context.py tests/test_option_save.py; do
   printf '    %-26s ' "$t"
   if ! out="$(cd "$REPO" && env -i HOME="$HOME" PATH=/usr/local/bin:/usr/bin:/bin PYTHONPATH=. .venv/bin/python "$t" 2>&1)"; then
     printf 'FAILED\n'

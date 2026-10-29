@@ -138,6 +138,11 @@ def main() -> int:
     print("\n".join(summary(read_day(REPO, day))))
     print("\n--- strategy V ---")
     print("\n".join(strategy_v(day)))
+    saved = REPO / "logs" / f"options-save-{day}.log"
+    if saved.exists():
+        lines = [x for x in saved.read_text(errors="replace").splitlines() if x.strip()]
+        print("\n--- option minutes saved for our own history ---")
+        print("\n".join(lines[-4:]) if lines else "nothing logged yet")
     check = REPO / "logs" / f"kite-history-check-{day}.log"
     if check.exists():
         print("\n--- Kite historical data check (one time; counts and dates only) ---")
