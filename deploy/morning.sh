@@ -41,6 +41,16 @@ main() {   # parsed whole before it runs, so the pull below cannot change it mid
 # waiting login with it. So the login runs inside tmux: after a drop, typing
 # `morning` again brings back the same waiting screen. It gives up after 30 min.
 if [ -z "${TMUX:-}" ] && [ "${1:-}" != "--inside" ] && command -v tmux >/dev/null; then
+  # A login still waiting (a dropped phone) is resumed below. Otherwise, if today's runners are
+  # already up, stop here: a second Kite login can end the token the running ones use.
+  if ! tmux has-session -t login 2>/dev/null; then
+    running="$(tmux ls -F '#S' 2>/dev/null | grep -E '^fno-(explore|v)$' | tr '\n' ' ' || true)"
+    if [ -n "$running" ]; then
+      echo "Already running today: $running"
+      echo "Nothing to do. A second login could cut off the running ones, so morning stops here."
+      exit 0
+    fi
+  fi
   self="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
   exec tmux new-session -A -s login \
     "timeout --foreground 1800 $(printf '%q ' "$self" --inside "$@"); echo; echo 'This window closes in 2 minutes.'; sleep 120"
