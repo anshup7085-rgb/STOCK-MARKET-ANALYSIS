@@ -1,9 +1,9 @@
 # Pre-registration — round 4: V-H, the historical track of strategy V (end of day)
 
-> **DRAFT, 2026-10-30. Not binding.** It binds only through a later commit that
-> removes this notice and records the file's SHA-256 in code, after the account
-> holder has read the plain summary. Until then no historical option price is
-> fetched, and the code that computes V-H refuses to run.
+Drafted **2026-10-30**. The account holder read the plain summary and approved it
+the same day. **Bound 2026-10-30** by the commit that records this file's SHA-256
+in `trading/fno/vh.py`; the code that computes V-H refuses any other text. No
+historical option price had been fetched when it was bound.
 
 ## What the author has seen
 
@@ -73,10 +73,11 @@ Stated before binding, so a reader can judge what could have shaped the rules:
 
 ## 3. Cycles, entry and strikes
 
-- **Expiries.** E is any expiry date carried by NIFTY option rows in the files.
-  The weekly chain is the set of such dates that lie within 10 days of the next
-  one, plus the last date of each such run. E_prev is the chain's date before E.
-  The first cycle is the first E whose E_prev is also in the chain.
+- **Expiries.** The union of every expiry date carried by NIFTY option rows in
+  the files. A date is in the **weekly chain** if another date of the union lies
+  within 10 days of it, before or after; a date with no such neighbour (a
+  quarterly or long-dated expiry) is not. E is a date of the chain; E_prev is the
+  chain's date before E. The first cycle is the first E that has an E_prev.
 - **Eligible sessions** of E, as in PREREGISTRATION_3 section 4: sessions d with
   E_prev < d < E and at least 3 sessions in (d, E], counting E.
 - **Entry.** At the first eligible session d whose checks below all pass, at
@@ -98,7 +99,7 @@ Stated before binding, so a reader can judge what could have shaped the rules:
 
 - **Fill penalty.** h(x) = max(0.25, 0.01 × x) points for a leg whose close is
   x. Sells fill at x − h(x), buys at x + h(x), rounded to the 0.05 tick (sells
-  down, buys up).
+  down, buys up). A sell that would fill at or below 0 means no trade at d.
 - **Credit** C = sells − buys, in points. **Floor C ≥ 20.00, cap C ≤ 80.00,**
   as in V. Outside them: no trade at d.
 - **Contract.** q = 65 for every cycle, the NIFTY lot on the day of binding.
@@ -153,13 +154,16 @@ Every figure here covers the whole window, including items after the outcome.
 - The same sequence with no fill penalty, and with the harshest spread V would
   accept, h(x) = max(0.5, 0.05 × x).
 - Costs as a share of credit.
+- **If minute prices of past NIFTY options are bought later** (for example from
+  Dhan), V's own entry slots (10:00–14:00) may be replayed on the cycles they
+  cover, as a cross-check of the close-entry approximation. It is labelled
+  descriptive and never changes the verdict.
 
 ## 8. Order of work
 
-1. The account holder reads the plain summary. The author corrects anything they
-   question, in this file, before binding.
-2. **Binding**: a commit removes the draft notice and records this file's
-   SHA-256 in the code. The code refuses to run against any other text.
+1. The account holder reads the plain summary (done, 2026-10-30).
+2. **Binding** (done, 2026-10-30): the commit that records this file's SHA-256
+   in the code. The code refuses to run against any other text.
 3. The downloader and both implementations are tested on synthetic files.
 4. Only then are NSE's files for the window downloaded, on the runner's machine.
 5. Both implementations run once. The verdict and section 7 are reported as
