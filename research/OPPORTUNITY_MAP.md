@@ -31,7 +31,7 @@ useful, not yet · **SKIP** not worth it.
 | What | Why | Status |
 |---|---|---|
 | Rules written down before the test, judged by the betting test | Stops us fooling ourselves | HAVE |
-| Past-data test of weekly strategies, 2019 to 2026, end of day | A first verdict in weeks, not years | NEXT (its rules are written first) |
+| Past-data test of weekly strategies, 2019 to 2026, end of day | A first verdict in weeks, not years | DONE: V-H **failed** (31 Oct): 243 trades, 69.5% won, mean R −0.021. V never goes live. The downloaded files (1,923 sessions) stay on the server for later registered tests |
 | Intraday replay of the explorer's strategies on minute history | The same, for intraday | NEXT, after the expired-option data |
 | Quick idea screening on AlgoTest or Stockmock (AlgoTest: from ₹499 for 500 backtests, free weekly backtests, **reported**) | A fast filter for ideas like your cousin's; never proof | LATER, optional |
 | Paper fills against real fills | Measures how much worse real orders fill | At the small-money stage |
