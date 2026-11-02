@@ -15,8 +15,9 @@ from pathlib import Path
 
 from market.config import IST
 from market.calendar import TradingCalendar
-from trading.fno.context import (SOURCES, Unavailable, context_dir, parse_bhavcopy, parse_fii_dii, parse_index_close,
-                                 parse_participant_oi, read_day, record_day, record_recent, summary, trading_days_back)
+from trading.fno.context import (SOURCES, URLS, Unavailable, context_dir, parse_bhavcopy, parse_fii_stats,
+                                 parse_index_close, parse_participant_oi, read_day, record_day, record_recent, summary,
+                                 trading_days_back)
 
 DAY = date(2026, 10, 28)
 NOW = datetime(2026, 10, 28, 19, 0, tzinfo=IST)
@@ -28,10 +29,7 @@ INDEX = (b"Index Name,Index Date,Open Index Value,High Index Value,Low Index Val
          b"Points Change,Change(%),Volume\n"
          b"Nifty 50,28-10-2026,22700,22800,22600,22750.5,50.5,0.22,1\n"
          b"India VIX,28-10-2026,13.1,13.6,12.9,13.25,0.15,1.14,0\n")
-FIIDII = json.dumps([
-    {"category": "DII **", "date": "28-Oct-2026", "buyValue": "9000.5", "sellValue": "7000", "netValue": "2000.5"},
-    {"category": "FII/FPI *", "date": "28-Oct-2026", "buyValue": "6000", "sellValue": "8500", "netValue": "-2500"},
-]).encode()
+FII_STATS = b"\xd0\xcf\x11\xe0" + b"\0" * 5000                          # the start of an old-style Excel file
 
 
 def _bhav(rows=None) -> bytes:
@@ -96,19 +94,17 @@ def test_bhavcopy_gives_put_call_ratios_and_biggest_strikes_for_nifty_only():
         pass
 
 
-def test_fii_dii_cash_is_filed_under_the_session_the_reply_names():
-    session, d = parse_fii_dii(FIIDII)
-    assert session == DAY and d["fii"]["net"] == -2500 and d["dii"]["net"] == 2000.5
-    mixed = FIIDII.replace(b'"date": "28-Oct-2026", "buyValue": "6000"', b'"date": "27-Oct-2026", "buyValue": "6000"')
-    for bad in (b"<html>blocked</html>", mixed, b"[]"):
-        try:
-            parse_fii_dii(bad)
-            raise AssertionError(f"accepted {bad[:30]!r}")
-        except Unavailable:
-            pass
+def test_fii_stats_is_kept_only_when_it_is_an_excel_file():
+    assert parse_fii_stats(FII_STATS, DAY) == {"bytes": len(FII_STATS)}
+    assert URLS["fii_stats"].format(d=DAY).endswith("/fo/fii_stats_28-Oct-2026.xls")
+    try:
+        parse_fii_stats(b"<html>no such file</html>", DAY)
+        raise AssertionError("accepted an error page")
+    except Unavailable:
+        pass
 
 
-ARCHIVE = {"participant_oi": PARTICIPANT, "index_close": INDEX, "fo_bhavcopy": _bhav()}
+ARCHIVE = {"participant_oi": PARTICIPANT, "index_close": INDEX, "fo_bhavcopy": _bhav(), "fii_stats": FII_STATS}
 
 
 def test_a_day_is_recorded_source_by_source_and_ok_sources_are_never_refetched():
@@ -118,11 +114,14 @@ def test_a_day_is_recorded_source_by_source_and_ok_sources_are_never_refetched()
 
     def fetch(name, day):
         calls.append(name)
+        if name == "fii_stats" and "fii_stats" not in files:
+            raise Unavailable("HTTPError: 404")
         return files[name]
 
-    rec = record_day(root, DAY, fetch, NOW, ("unavailable", "HTTPError: 403"))
+    del files["fii_stats"]
+    rec = record_day(root, DAY, fetch, NOW)
     assert [rec["sources"][n]["status"] for n in SOURCES] == ["ok", "ok", "ok", "unavailable"]
-    assert rec["sources"]["fii_dii_cash"]["reason"] == "HTTPError: 403"
+    assert rec["sources"]["fii_stats"]["reason"] == "HTTPError: 404"
     assert len(rec["sources"]["participant_oi"]["sha256"]) == 64
     raw = context_dir(root) / "raw" / DAY.isoformat()
     assert (raw / "participant_oi.csv").read_bytes() == PARTICIPANT and (raw / "index_close.csv").exists()
@@ -130,53 +129,41 @@ def test_a_day_is_recorded_source_by_source_and_ok_sources_are_never_refetched()
     first = json.dumps(rec["sources"]["participant_oi"], sort_keys=True)
     calls.clear()
     files["participant_oi"] = b"changed"                                    # would fail to parse if it were refetched
-    rec = record_day(root, DAY, fetch, NOW, ("ok", DAY, parse_fii_dii(FIIDII)[1], FIIDII))
-    assert calls == [] and rec["sources"]["fii_dii_cash"]["status"] == "ok"
-    assert (raw / "fii_dii_cash.json").read_bytes() == FIIDII
+    files["fii_stats"] = FII_STATS
+    rec = record_day(root, DAY, fetch, NOW)
+    assert calls == ["fii_stats"] and rec["sources"]["fii_stats"]["status"] == "ok"
+    assert (raw / "fii_stats.xls").read_bytes() == FII_STATS
     assert json.dumps(rec["sources"]["participant_oi"], sort_keys=True) == first       # untouched
     assert read_day(root, DAY) == rec
 
 
-def test_flows_for_another_session_are_never_filed_under_this_day():
-    root = Path(tempfile.mkdtemp())
-    other = date(2026, 10, 27)
-    rec = record_day(root, DAY, lambda n, d: ARCHIVE[n], NOW, ("ok", other, {"fii": {}, "dii": {}}, b"x"))
-    assert rec["sources"]["fii_dii_cash"]["status"] == "unavailable" and "2026-10-27" in rec["sources"]["fii_dii_cash"]["reason"]
-    assert record_day(root, DAY, lambda n, d: ARCHIVE[n], NOW)["sources"]["fii_dii_cash"]["reason"] == "not fetched"
-
-
-def test_a_run_fetches_the_flows_once_and_files_them_under_their_session():
+def test_a_run_covers_the_last_trading_days_and_skips_what_is_done():
     root = Path(tempfile.mkdtemp())
     cal = TradingCalendar(holidays={"2026-10-26": "a holiday"})
     calls = []
 
     def fetch(name, day):
         calls.append((name, day))
-        if name == "fii_dii_cash":
-            return FIIDII.replace(b"28-Oct-2026", b"27-Oct-2026")             # the morning after: yesterday's flows
         return ARCHIVE[name].replace(b"28-10-2026", day.strftime("%d-%m-%Y").encode())
 
     assert trading_days_back(date(2026, 10, 28), 3, cal) == [date(2026, 10, 23), date(2026, 10, 27), date(2026, 10, 28)]
     recs = record_recent(root, date(2026, 10, 28), 3, fetch, NOW, cal)
     assert [r["day"] for r in recs] == ["2026-10-23", "2026-10-27", "2026-10-28"]
-    assert sum(1 for n, _ in calls if n == "fii_dii_cash") == 1
-    got = {r["day"]: r["sources"]["fii_dii_cash"]["status"] for r in recs}
-    assert got == {"2026-10-23": "unavailable", "2026-10-27": "ok", "2026-10-28": "unavailable"}
+    assert all(s["status"] == "ok" for r in recs for s in r["sources"].values())
     calls.clear()
     record_recent(root, date(2026, 10, 28), 3, fetch, NOW, cal)
-    assert ("fii_dii_cash", None) in calls and not any(n != "fii_dii_cash" for n, _ in calls)   # archive files done
+    assert calls == []                                                      # every file already recorded
 
 
 def test_the_summary_reports_what_is_missing_and_never_fills_it_in():
     root = Path(tempfile.mkdtemp())
-    rec = record_day(root, DAY, lambda n, d: (_ for _ in ()).throw(Unavailable("down")), NOW, ("unavailable", "down"))
+    rec = record_day(root, DAY, lambda n, d: (_ for _ in ()).throw(Unavailable("down")), NOW)
     text = "\n".join(summary(rec))
     assert text.count("unavailable") == 4 and "VIX" not in text
     assert summary(None) == ["not recorded yet"]
-    full = record_day(Path(tempfile.mkdtemp()), DAY, lambda n, d: ARCHIVE[n], NOW,
-                      ("ok", DAY, parse_fii_dii(FIIDII)[1], FIIDII))
+    full = record_day(Path(tempfile.mkdtemp()), DAY, lambda n, d: ARCHIVE[n], NOW)
     s = "\n".join(summary(full))
-    assert "long share 25%" in s and "India VIX 13.25" in s and "put-call OI 1.5" in s and "FII -2,500" in s
+    assert "long share 25%" in s and "India VIX 13.25" in s and "put-call OI 1.5" in s and "FII derivatives" in s
 
 
 def _backfill(tmp):
