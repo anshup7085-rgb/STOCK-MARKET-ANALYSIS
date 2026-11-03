@@ -62,6 +62,7 @@ def explorer(day: str) -> list[str]:
     nets = [r["payload"]["net"] for r in today if r["type"] == "XP_EXIT"]
     out.append(f"today: {sum(r['type'] == 'XP_ENTRY' for r in today)} opened, {len(nets)} closed, "
                f"net Rs{sum(nets):+,.0f}")
+    out.append(money(recs, day))
     skips = defaultdict(list)
     for r in today:
         if r["type"] == "XP_SKIP":
@@ -73,6 +74,41 @@ def explorer(day: str) -> list[str]:
     out.append("")
     out.append(format_scoreboard(scoreboard(recs)))
     return out
+
+
+def peak_margin(recs: list[dict], day: str) -> float:
+    """The most margin the day's open positions needed at one time, from the entries' own estimates."""
+    events = []
+    for r in recs:
+        if r.get("asof") != day:
+            continue
+        p = r["payload"]
+        if r["type"] == "XP_ENTRY":
+            events.append((p["t"], 1, p["id"], float(p.get("margin_est") or 0)))
+        elif r["type"] == "XP_EXIT":
+            events.append((p["t"], 0, p["id"], 0.0))
+    held, used, peak = {}, 0.0, 0.0
+    for _, kind, pid, m in sorted(events):
+        if kind == 1:
+            held[pid] = m
+            used += m
+            peak = max(peak, used)
+        else:
+            used -= held.pop(pid, 0.0)
+    return peak
+
+
+def money(recs: list[dict], day: str) -> str:
+    """The rupees behind the result: the paper capital, today's and the total net as a share of it, and
+    the most margin the trades needed at once (Zerodha would block about that much)."""
+    init = next((r for r in recs if r["type"] == "XP_INIT"), None)
+    if init is None:
+        return "money: no explorer book"
+    cap = float(init["payload"]["capital"])
+    nets = [r["payload"]["net"] for r in recs if r["type"] == "XP_EXIT"]
+    today = sum(r["payload"]["net"] for r in recs if r["type"] == "XP_EXIT" and r.get("asof") == day)
+    return (f"money: paper capital Rs{cap:,.0f} | today Rs{today:+,.0f} ({today / cap:+.2%}) | since {init.get('asof')} "
+            f"Rs{sum(nets):+,.0f} ({sum(nets) / cap:+.2%}) | most margin in use today ~Rs{peak_margin(recs, day):,.0f}")
 
 
 def whatif(day: str) -> list[str]:
@@ -91,6 +127,7 @@ def whatif(day: str) -> list[str]:
     opened = sum(r["type"] == "XP_ENTRY" for r in today)
     out.append(f"if every signal had been traded at 1 lot: {opened} trades, net Rs{sum(nets.values()):+,.0f}"
                + ("  (" + ", ".join(f"{k} {v:+,.0f}" for k, v in sorted(nets.items())) + ")" if nets else ""))
+    out.append(f"  taking every trade would have needed ~Rs{peak_margin(today, day):,.0f} of margin at the busiest moment")
     return out
 
 
@@ -123,6 +160,13 @@ def strategy_v(day: str) -> list[str]:
             out.append(f"  cycle {p['expiry']}: {p['outcome']}")
         elif r["type"] in ("FNO_PASS_ERROR", "FNO_SETTLEMENT_PENDING"):
             out.append(f"  {r['type']}: {str(p.get('error') or p.get('why'))[:120]}")
+    settled = [r["payload"]["net"] for r in recs if r["type"] == "FNO_SETTLED"]
+    margins = [(r["payload"]["trade"].get("margin") or {}).get("final") for r in recs if r["type"] == "FNO_ENTRY"]
+    margins = [m for m in margins if isinstance(m, (int, float))]
+    eq = 500_000.0                                        # V's fixed paper equity (PREREGISTRATION_3)
+    out.append(f"money: V's paper equity Rs{eq:,.0f}, at most Rs5,000 at risk a week | settled so far "
+               f"Rs{sum(settled):+,.0f} ({sum(settled) / eq:+.2%}) over {len(settled)} week(s)"
+               + (f" | Zerodha's margin for its last trade Rs{margins[-1]:,.0f}" if margins else ""))
     return out
 
 
