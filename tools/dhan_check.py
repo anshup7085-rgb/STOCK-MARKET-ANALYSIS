@@ -91,7 +91,15 @@ def fetch(token: str, code: int, strike: str, right: str, days=SESSIONS) -> tupl
         for k, v in s.items():
             if isinstance(v, list):
                 joined.setdefault(k, []).extend(v)
-    return (joined if joined.get("timestamp") else None), problems
+    if not joined.get("timestamp"):
+        return None, problems
+    # Dhan returned more than the day asked for (its toDate behaved as inclusive): keep each minute once
+    keep, seen = [], set()
+    for i, ts in enumerate(joined["timestamp"]):
+        if ts not in seen:
+            seen.add(ts)
+            keep.append(i)
+    return {k: [v[i] for i in keep] for k, v in joined.items() if len(v) == len(joined["timestamp"])}, problems
 
 
 def series(reply: dict, right: str) -> dict | None:
@@ -117,25 +125,45 @@ def ours() -> dict[tuple[float, str], dict[int, tuple[float, float]]]:
     return out
 
 
+LAST_DAY = "2026-11-03"                # the 3 Nov contracts' last session; later minutes are the next expiry's
+SHIFTS = (-120, -60, 0, 60, 120)
+
+
 def compare(s: dict, right: str, mine: dict, shift: int) -> dict:
+    """Dhan's minutes against ours, inside market hours (09:15 to 15:29) of the 3 Nov contracts' life."""
     kind = "CE" if right == "CALL" else "PE"
-    n = found = tick = pct = oi_same = 0
+    n = found = tick = pct = oi_same = after_close = later = 0
     days: dict[str, int] = {}
     for ts, k, c, oi in zip(s["timestamp"], s.get("strike") or [], s.get("close") or [], s.get("oi") or []):
-        n += 1
         t = int(ts) + shift
-        day = datetime.fromtimestamp(t, IST).date().isoformat()
+        when = datetime.fromtimestamp(t, IST)
+        day = when.date().isoformat()
+        if day > LAST_DAY:
+            later += 1
+            continue
+        if not ("09:15" <= when.strftime("%H:%M") <= "15:29"):
+            after_close += 1
+            continue
+        n += 1
         days[day] = days.get(day, 0) + 1
         row = mine.get((float(k), kind), {}).get(t)
         if row is None:
             continue
         found += 1
         diff = abs(float(c) - row[0])
-        tick += diff <= 0.05 + 1e-9
+        tick += diff < 0.005                                    # exactly equal (prices are on a 0.05 tick)
         pct += diff <= 0.01 * max(row[0], 0.05) + 1e-9
         oi_same += abs(float(oi) - row[1]) < 1
-    return {"points": n, "found_in_ours": found, "close_within_a_tick": tick, "close_within_1pct": pct,
-            "oi_equal": oi_same, "minutes_per_day": days}
+    return {"points": n, "found_in_ours": found, "close_exact": tick, "close_within_1pct": pct,
+            "oi_equal": oi_same, "minutes_per_day": days, "after_close": after_close, "next_expiry_days": later}
+
+
+def best_shift(s: dict, right: str, mine: dict) -> tuple[int, dict]:
+    """The time alignment with the most closes and open interests exactly equal: one minute off still
+    finds every minute, so the count of minutes found cannot choose it."""
+    results = {sh: compare(s, right, mine, sh) for sh in SHIFTS}
+    sh = max(results, key=lambda x: (results[x]["close_exact"] + results[x]["oi_equal"], -abs(x)))
+    return sh, results[sh]
 
 
 def main() -> int:
@@ -155,24 +183,23 @@ def main() -> int:
             print(f"  code {code}: no data ({'; '.join(problems)[:200]})")
             continue
         ts = s["timestamp"]
-        first, last = (datetime.fromtimestamp(int(x), IST) for x in (ts[0], ts[-1]))
+        first, last = (datetime.fromtimestamp(int(x), IST) for x in (min(ts), max(ts)))
         strikes = [float(k) for k in s.get("strike") or []]
-        shift_hits = {sh: compare(s, "CALL", mine, sh)["found_in_ours"] for sh in (0, -60, 60, -19800, 19800)}
-        shift = max(shift_hits, key=shift_hits.get)
-        r = compare(s, "CALL", mine, shift)
+        shift, r = best_shift(s, "CALL", mine)
         print(f"  code {code}: {len(ts)} minutes, {first:%d %b %H:%M} to {last:%d %b %H:%M} IST, strikes "
               f"{min(strikes):g}-{max(strikes):g}" if strikes else f"  code {code}: {len(ts)} minutes, no strike field")
         print(f"     matched to our copy: {r['found_in_ours']} of {r['points']} (time shift {shift}s); "
-              f"close equal to the tick {r['close_within_a_tick']}, within 1% {r['close_within_1pct']}, OI equal {r['oi_equal']}")
-        if r["found_in_ours"] and (best is None or r["found_in_ours"] > best[1]):
-            best = (code, r["found_in_ours"], shift)
+              f"close exactly equal {r['close_exact']}, within 1% {r['close_within_1pct']}, OI equal {r['oi_equal']}")
+        if r["close_exact"] and (best is None or r["close_exact"] > best[1]):
+            best = (code, r["close_exact"], shift)
     if best is None:
         print("\nno expiry code matched our 3 Nov week. Send this output to Claude; do not download anything yet.")
         return 1
 
     code, _, shift = best
-    print(f"\n2. the 3 Nov week, expiry code {code}: calls and puts from ATM-10 to ATM+10, sampled")
-    total = {"points": 0, "found_in_ours": 0, "close_within_a_tick": 0, "close_within_1pct": 0, "oi_equal": 0}
+    print(f"\n2. the 3 Nov week, expiry code {code}, Dhan's minutes shifted {shift:+d}s to line up with Zerodha's: "
+          f"calls and puts from ATM-10 to ATM+10, sampled")
+    total = {"points": 0, "found_in_ours": 0, "close_exact": 0, "close_within_1pct": 0, "oi_equal": 0}
     for strike in ("ATM-10", "ATM-2", "ATM-1", "ATM", "ATM+1", "ATM+2", "ATM+10"):
         for right in ("CALL", "PUT"):
             s, problems = fetch(token, code, strike, right)
@@ -182,16 +209,18 @@ def main() -> int:
             if problems:
                 print(f"  {strike:>6} {right}: missing sessions: {'; '.join(problems)[:160]}")
             r = compare(s, right, mine, shift)
+            own, _ = best_shift(s, right, mine)
             for k in total:
                 total[k] += r[k]
             full_days = sum(1 for v in r["minutes_per_day"].values() if v >= 370)
             print(f"  {strike:>6} {right}: {r['points']} minutes on {len(r['minutes_per_day'])} days ({full_days} full); "
-                  f"in our copy {r['found_in_ours']}; close to the tick {r['close_within_a_tick']}, "
-                  f"within 1% {r['close_within_1pct']}; OI equal {r['oi_equal']}")
+                  f"in our copy {r['found_in_ours']}; close exactly equal {r['close_exact']}, "
+                  f"within 1% {r['close_within_1pct']}; OI equal {r['oi_equal']}"
+                  + (f"; best alone at {own:+d}s" if own != shift else ""))
     f = max(total["found_in_ours"], 1)
     print(f"\nOVERALL: {total['points']} Dhan minutes; {total['found_in_ours']} found in our Zerodha copy "
-          f"({total['found_in_ours'] / max(total['points'], 1):.1%}); of those, close equal to the tick "
-          f"{total['close_within_a_tick'] / f:.1%}, within 1% {total['close_within_1pct'] / f:.1%}, "
+          f"({total['found_in_ours'] / max(total['points'], 1):.1%}); of those, close exactly equal "
+          f"{total['close_exact'] / f:.1%}, within 1% {total['close_within_1pct'] / f:.1%}, "
           f"OI equal {total['oi_equal'] / f:.1%}")
     print("Send this whole output to Claude. Your token was not saved anywhere.")
     return 0

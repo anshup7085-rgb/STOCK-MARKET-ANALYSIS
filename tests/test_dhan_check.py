@@ -57,23 +57,27 @@ def test_the_check_finds_the_near_code_and_reports_the_match():
         d = date.fromisoformat(body["fromDate"])
         assert body["toDate"] == (d + timedelta(days=1)).isoformat()             # one session a call
         ts, k, c, oi = [], [], [], []
-        for i, t in enumerate(_minutes(d)):
-            ts.append(int(t.timestamp()))
-            k.append(23600.0 if i < 200 else 23650.0)
-            c.append(round(100 + i * 0.05 + (0.1 if i % 50 == 0 else 0), 2))      # 8 of 375 off by 0.10
-            oi.append(5000 + i)
+        # like the real Dhan: the toDate day comes back too (overlaps), plus minutes after the close,
+        # and every minute is labelled one minute later than Zerodha labels it
+        days = [d] + ([d + timedelta(days=1)] if d + timedelta(days=1) in DAYS else [])
+        for dd in days:
+            for i, t in enumerate(_minutes(dd) + [datetime.combine(dd, time(15, 35), IST)]):
+                ts.append(int(t.timestamp()) + 60)
+                k.append(23600.0 if i < 200 else 23650.0)
+                c.append(round(100 + min(i, 374) * 0.05 + (0.1 if i % 50 == 0 else 0), 2))
+                oi.append(5000 + min(i, 374))
         s = {"timestamp": ts, "strike": k, "close": c, "oi": oi}
         return 200, {"data": {"ce": s if body["drvOptionType"] == "CALL" else None,
                               "pe": s if body["drvOptionType"] == "PUT" else None}}
-
     dc.call = fake_call
     out = io.StringIO()
     with redirect_stdout(out):
         assert dc.main() == 0
     text = out.getvalue()
-    assert "code 1: 750 minutes" in text and "code 2: no data" in text and "code 3: no data" in text
-    assert "expiry code 1" in text and "OVERALL: 31500 Dhan minutes; 31500 found" in text
-    assert "close equal to the tick 97.9%" in text and "TOKEN-123" not in text
+    assert "code 2: no data" in text and "code 3: no data" in text
+    assert "expiry code 1, Dhan's minutes shifted -60s" in text, text
+    assert "OVERALL: 31500 Dhan minutes; 31500 found" in text, text                     # each minute once, in hours
+    assert "close exactly equal 97.9%" in text and "OI equal 100.0%" in text and "TOKEN-123" not in text
     assert all(b["securityId"] == 13 and b["interval"] == "1" for b in calls)
     assert not any("TOKEN" in p.read_text() for p in (tmp / "out").iterdir())     # replies only, no token
 
