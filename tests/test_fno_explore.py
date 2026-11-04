@@ -403,6 +403,21 @@ def test_entry_fills_at_the_touch_and_the_target_closes_it():
     assert len(ex.state().closed) == 1                       # max_entries 1 a day
 
 
+def test_an_entry_records_the_brokers_margin_and_a_failing_margin_call_never_stops_it():
+    ex, clock, feed = scripted()
+    seen = []
+    feed.margin_for = lambda orders: seen.append(orders) or {"initial": 31000.0, "final": 30500.0}
+    at(ex, clock, 9, 20)
+    e = next(iter(ex.state().open.values()))
+    assert e["broker_margin"] == {"initial": 31000.0, "final": 30500.0}
+    assert [(o["side"], o["qty"]) for o in seen[0]] == [("BUY", LOT), ("SELL", LOT)]
+    ex2, clock2, feed2 = scripted()
+    feed2.margin_for = lambda orders: (_ for _ in ()).throw(RuntimeError("margin API down"))
+    at(ex2, clock2, 9, 20)
+    e2 = next(iter(ex2.state().open.values()))
+    assert "margin API down" in e2["broker_margin"]["error"]                # recorded; the entry still stands
+
+
 def test_stop_trail_and_square_off():
     ex, clock, feed = scripted([dict(SPREAD, exit={"stop": {"R": 0.3}})])
     at(ex, clock, 9, 20)

@@ -708,6 +708,15 @@ class Explorer:
             rep.alerts.append(f"quotes unavailable: {str(exc)[:160]}")
             return {}
 
+    def _broker_margin(self, legs) -> dict | None:
+        """The broker's own margin figure for the structure, for the record only: the entry check above
+        still uses the estimate, so the explorer's rules do not change. A failure is recorded, never raised."""
+        try:
+            return self.feed.margin_for([{"symbol": g.symbol, "side": g.side, "qty": g.qty, "price": g.price}
+                                         for g in legs])
+        except Exception as exc:                                # noqa: BLE001
+            return {"error": f"{type(exc).__name__}: {str(exc)[:160]}"}
+
     def _skip(self, st: XState, s: Strategy, today: date, code: str, detail: str, rep: PassReport) -> None:
         rep.skips.append(f"{s.name}: {detail}")
         key = (today.isoformat(), s.name, code)
@@ -796,6 +805,7 @@ class Explorer:
             "target_rupees": sized.target, "trail": list(s.trail) if s.trail else None,
             "exit_time": s.exit_time.isoformat(timespec="minutes"), "entry_costs": sized.costs_in,
             "exit_costs_est": sized.costs_out_est, "credit": sized.credit, "margin_est": sized.margin,
+            "broker_margin": self._broker_margin(sized.legs),
             "breakevens": breakevens(sized.legs, spot), "fee_card": self.sched.name,
         }
         self._log("XP_ENTRY", today, **entry)

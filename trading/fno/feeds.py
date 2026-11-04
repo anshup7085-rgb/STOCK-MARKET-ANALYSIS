@@ -74,6 +74,11 @@ class FnoFeed(ABC):
         """The broker's margin for the four orders as one basket, where its API gives it."""
         return None
 
+    def margin_for(self, orders: list[dict]) -> dict | None:
+        """The broker's margin for a basket of {symbol, side, qty, price} orders, where its API gives it.
+        Read-only: the broker's margin calculator, never an order."""
+        return None
+
     def broker_charges(self, legs: list[dict], qty: int) -> dict | None:
         """The broker's own computed charges per order, where its API gives them."""
         return None
@@ -236,6 +241,16 @@ class KiteFnoFeed(FnoFeed):
         try:
             r = self._kite.basket_order_margins(self._orders(legs, qty, "price"),
                                                 consider_positions=False, mode="compact")
+        except Exception as exc:
+            return {"error": str(exc)[:200]}
+        return {"initial": (r.get("initial") or {}).get("total"), "final": (r.get("final") or {}).get("total")}
+
+    def margin_for(self, orders: list[dict]) -> dict | None:
+        basket = [{"exchange": "NFO", "tradingsymbol": o["symbol"], "transaction_type": o["side"], "variety": "regular",
+                   "product": "NRML", "order_type": "LIMIT", "quantity": int(o["qty"]), "price": o["price"],
+                   "trigger_price": 0} for o in orders]
+        try:
+            r = self._kite.basket_order_margins(basket, consider_positions=False, mode="compact")
         except Exception as exc:
             return {"error": str(exc)[:200]}
         return {"initial": (r.get("initial") or {}).get("total"), "final": (r.get("final") or {}).get("total")}

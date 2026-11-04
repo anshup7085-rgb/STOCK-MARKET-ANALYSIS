@@ -76,6 +76,15 @@ def explorer(day: str) -> list[str]:
     return out
 
 
+def entry_margin(p: dict) -> tuple[float, bool]:
+    """(margin, is it Zerodha's own figure). Zerodha's, where the entry recorded it; else the explorer's
+    estimate, which for spreads is only their worst loss and far below what Zerodha blocks."""
+    b = p.get("broker_margin") or {}
+    if isinstance(b.get("final"), (int, float)) and b["final"] > 0:
+        return float(b["final"]), True
+    return float(p.get("margin_est") or 0), False
+
+
 def peak_margin(recs: list[dict], day: str) -> float:
     """The most margin the day's open positions needed at one time, from the entries' own estimates."""
     events = []
@@ -84,7 +93,7 @@ def peak_margin(recs: list[dict], day: str) -> float:
             continue
         p = r["payload"]
         if r["type"] == "XP_ENTRY":
-            events.append((p["t"], 1, p["id"], float(p.get("margin_est") or 0)))
+            events.append((p["t"], 1, p["id"], entry_margin(p)[0]))
         elif r["type"] == "XP_EXIT":
             events.append((p["t"], 0, p["id"], 0.0))
     held, used, peak = {}, 0.0, 0.0
@@ -107,8 +116,13 @@ def money(recs: list[dict], day: str) -> str:
     cap = float(init["payload"]["capital"])
     nets = [r["payload"]["net"] for r in recs if r["type"] == "XP_EXIT"]
     today = sum(r["payload"]["net"] for r in recs if r["type"] == "XP_EXIT" and r.get("asof") == day)
+    entries = [r["payload"] for r in recs if r["type"] == "XP_ENTRY" and r.get("asof") == day]
+    real = sum(entry_margin(p)[1] for p in entries)
+    basis = ("Zerodha's figures" if entries and real == len(entries) else
+             "estimates, below Zerodha's for spreads" if not real else f"Zerodha's for {real} of {len(entries)}")
     return (f"money: paper capital Rs{cap:,.0f} | today Rs{today:+,.0f} ({today / cap:+.2%}) | since {init.get('asof')} "
-            f"Rs{sum(nets):+,.0f} ({sum(nets) / cap:+.2%}) | most margin in use today ~Rs{peak_margin(recs, day):,.0f}")
+            f"Rs{sum(nets):+,.0f} ({sum(nets) / cap:+.2%}) | most margin in use today ~Rs{peak_margin(recs, day):,.0f} "
+            f"({basis})")
 
 
 def whatif(day: str) -> list[str]:

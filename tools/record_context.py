@@ -17,7 +17,7 @@ from datetime import datetime
 from pathlib import Path
 
 from market.config import IST
-from trading.fno.context import record_recent, summary
+from trading.fno.context import SOURCES, record_recent, summary
 
 REPO = Path(__file__).resolve().parents[1]
 
@@ -29,7 +29,8 @@ def main() -> int:
     today = datetime.now(IST).date()
     recs = record_recent(REPO, today, args.days)
     print("market context recorded: " + ", ".join(
-        f"{r['day'][5:]} {sum(s['status'] == 'ok' for s in r['sources'].values())}/{len(r['sources'])}" for r in recs))
+        f"{r['day'][5:]} {sum(r['sources'].get(n, {}).get('status') == 'ok' for n in SOURCES)}/{len(SOURCES)}"
+        for r in recs))
     return 0
 
 

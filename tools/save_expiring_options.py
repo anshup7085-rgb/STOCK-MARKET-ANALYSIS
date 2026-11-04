@@ -106,7 +106,11 @@ def save(kite, today: date, root: Path = ROOT, now_fn=lambda: datetime.now(IST),
         folder = root / exp
         path = folder / f"{r['tradingsymbol']}.csv.gz"
         try:
-            rows = history(kite, int(r["instrument_token"]), today, sleep)
+            try:
+                rows = history(kite, int(r["instrument_token"]), today, sleep)
+            except Exception:                                   # noqa: BLE001 - one retry: Kite's gateway blips (502)
+                sleep(5)
+                rows = history(kite, int(r["instrument_token"]), today, sleep)
         except Exception as exc:                                # noqa: BLE001 - counted, the run goes on
             summary["failed"] += 1
             summary.setdefault("errors", []).append(f"{r['tradingsymbol']}: {type(exc).__name__}: {str(exc)[:80]}")
