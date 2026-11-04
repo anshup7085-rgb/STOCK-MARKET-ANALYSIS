@@ -110,8 +110,8 @@ def series(reply: dict, right: str) -> dict | None:
     return s if isinstance(s, dict) and s.get("timestamp") else None
 
 
-def ours() -> dict[tuple[float, str], dict[int, tuple[float, float]]]:
-    """(strike, CE/PE) -> {epoch second: (close, oi)} from the Zerodha files."""
+def ours() -> dict[tuple[float, str], dict[int, tuple[float, float, float, float]]]:
+    """(strike, CE/PE) -> {epoch second: (close, oi, high, low)} from the Zerodha files."""
     out = {}
     for p in sorted(OURS.glob("*.csv.gz")):
         m = SYMBOL.match(p.name)
@@ -120,11 +120,12 @@ def ours() -> dict[tuple[float, str], dict[int, tuple[float, float]]]:
         rows = {}
         for r in csv.DictReader(gzip.open(p, "rt")):
             ts = int(datetime.fromisoformat(r["time"]).timestamp())
-            rows[ts] = (float(r["close"]), float(r["oi"]) if r.get("oi") else 0.0)
+            rows[ts] = (float(r["close"]), float(r["oi"]) if r.get("oi") else 0.0, float(r["high"]), float(r["low"]))
         out[(float(m.group(1)), m.group(2))] = rows
     return out
 
 
+FIRST_DAY = "2026-10-28"               # 27 Oct was itself an expiry: that day "near" meant the 27 Oct contracts
 LAST_DAY = "2026-11-03"                # the 3 Nov contracts' last session; later minutes are the next expiry's
 SHIFTS = (-120, -60, 0, 60, 120)
 
@@ -132,13 +133,14 @@ SHIFTS = (-120, -60, 0, 60, 120)
 def compare(s: dict, right: str, mine: dict, shift: int) -> dict:
     """Dhan's minutes against ours, inside market hours (09:15 to 15:29) of the 3 Nov contracts' life."""
     kind = "CE" if right == "CALL" else "PE"
-    n = found = tick = pct = oi_same = after_close = later = 0
+    n = found = tick = pct = oi_same = after_close = later = inside = 0
+    diffs: list[float] = []
     days: dict[str, int] = {}
     for ts, k, c, oi in zip(s["timestamp"], s.get("strike") or [], s.get("close") or [], s.get("oi") or []):
         t = int(ts) + shift
         when = datetime.fromtimestamp(t, IST)
         day = when.date().isoformat()
-        if day > LAST_DAY:
+        if day > LAST_DAY or day < FIRST_DAY:
             later += 1
             continue
         if not ("09:15" <= when.strftime("%H:%M") <= "15:29"):
@@ -150,12 +152,27 @@ def compare(s: dict, right: str, mine: dict, shift: int) -> dict:
         if row is None:
             continue
         found += 1
+        diffs.append(float(c) - row[0])
+        inside += row[3] - 1e-9 <= float(c) <= row[2] + 1e-9
         diff = abs(float(c) - row[0])
         tick += diff < 0.005                                    # exactly equal (prices are on a 0.05 tick)
         pct += diff <= 0.01 * max(row[0], 0.05) + 1e-9
         oi_same += abs(float(oi) - row[1]) < 1
     return {"points": n, "found_in_ours": found, "close_exact": tick, "close_within_1pct": pct,
-            "oi_equal": oi_same, "minutes_per_day": days, "after_close": after_close, "next_expiry_days": later}
+            "oi_equal": oi_same, "minutes_per_day": days, "after_close": after_close, "other_expiry_days": later,
+            "inside_range": inside, "diffs": diffs}
+
+
+def spread(diffs: list[float]) -> str:
+    """How far Dhan's close sits from Zerodha's, in index points: typical, near-worst, and any lean."""
+    if not diffs:
+        return "no minutes"
+    a = sorted(abs(d) for d in diffs)
+    med, p95 = a[len(a) // 2], a[int(0.95 * (len(a) - 1))]
+    lean = sum(diffs) / len(diffs)
+    up = sum(d > 0 for d in diffs) / len(diffs)
+    return (f"difference: typical {med:.2f} pts, 95% within {p95:.2f} pts; average lean {lean:+.3f} pts "
+            f"(Dhan higher on {up:.0%} of minutes)")
 
 
 def best_shift(s: dict, right: str, mine: dict) -> tuple[int, dict]:
@@ -199,7 +216,8 @@ def main() -> int:
     code, _, shift = best
     print(f"\n2. the 3 Nov week, expiry code {code}, Dhan's minutes shifted {shift:+d}s to line up with Zerodha's: "
           f"calls and puts from ATM-10 to ATM+10, sampled")
-    total = {"points": 0, "found_in_ours": 0, "close_exact": 0, "close_within_1pct": 0, "oi_equal": 0}
+    total = {"points": 0, "found_in_ours": 0, "close_exact": 0, "close_within_1pct": 0, "oi_equal": 0,
+             "inside_range": 0, "diffs": []}
     for strike in ("ATM-10", "ATM-2", "ATM-1", "ATM", "ATM+1", "ATM+2", "ATM+10"):
         for right in ("CALL", "PUT"):
             s, problems = fetch(token, code, strike, right)
@@ -215,13 +233,16 @@ def main() -> int:
             full_days = sum(1 for v in r["minutes_per_day"].values() if v >= 370)
             print(f"  {strike:>6} {right}: {r['points']} minutes on {len(r['minutes_per_day'])} days ({full_days} full); "
                   f"in our copy {r['found_in_ours']}; close exactly equal {r['close_exact']}, "
-                  f"within 1% {r['close_within_1pct']}; OI equal {r['oi_equal']}"
-                  + (f"; best alone at {own:+d}s" if own != shift else ""))
+                  f"within 1% {r['close_within_1pct']}; inside Zerodha's high-low {r['inside_range']}; "
+                  f"OI equal {r['oi_equal']}" + (f"; best alone at {own:+d}s" if own != shift else ""))
+            print(f"         {spread(r['diffs'])}")
     f = max(total["found_in_ours"], 1)
     print(f"\nOVERALL: {total['points']} Dhan minutes; {total['found_in_ours']} found in our Zerodha copy "
           f"({total['found_in_ours'] / max(total['points'], 1):.1%}); of those, close exactly equal "
           f"{total['close_exact'] / f:.1%}, within 1% {total['close_within_1pct'] / f:.1%}, "
+          f"inside Zerodha's high-low for that minute {total['inside_range'] / f:.1%}, "
           f"OI equal {total['oi_equal'] / f:.1%}")
+    print(f"  {spread(total['diffs'])}")
     print("Send this whole output to Claude. Your token was not saved anywhere.")
     return 0
 

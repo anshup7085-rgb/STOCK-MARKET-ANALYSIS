@@ -37,7 +37,8 @@ def _ours(folder: Path):
             lines = ["time,open,high,low,close,volume,oi"]
             for d in DAYS:
                 for i, t in enumerate(_minutes(d)):
-                    lines.append(f"{t.isoformat()},1,1,1,{100 + i * 0.05:.2f},10,{5000 + i}")
+                    c = 100 + i * 0.05
+                    lines.append(f"{t.isoformat()},1,{c + 0.2:.2f},{c - 0.2:.2f},{c:.2f},10,{5000 + i}")
             (folder / f"NIFTY26N03{k}{kind}.csv.gz").write_bytes(gzip.compress("\n".join(lines).encode()))
 
 
@@ -76,7 +77,8 @@ def test_the_check_finds_the_near_code_and_reports_the_match():
     text = out.getvalue()
     assert "code 2: no data" in text and "code 3: no data" in text
     assert "expiry code 1, Dhan's minutes shifted -60s" in text, text
-    assert "OVERALL: 31500 Dhan minutes; 31500 found" in text, text                     # each minute once, in hours
+    assert "OVERALL: 26250 Dhan minutes; 26250 found" in text, text      # each minute once, in hours, after 27 Oct
+    assert "inside Zerodha's high-low for that minute 100.0%" in text and "typical 0.00 pts" in text
     assert "close exactly equal 97.9%" in text and "OI equal 100.0%" in text and "TOKEN-123" not in text
     assert all(b["securityId"] == 13 and b["interval"] == "1" for b in calls)
     assert not any("TOKEN" in p.read_text() for p in (tmp / "out").iterdir())     # replies only, no token
