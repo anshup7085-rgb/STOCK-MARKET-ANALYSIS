@@ -1,0 +1,10 @@
+# Intraday option tests — log of steps
+
+Each step with its date, so the order is on record. Commits are on branch
+`claude/brave-allen-kas61d`.
+
+| # | When | Step | Evidence |
+|---|---|---|---|
+| 1 | 2026-11-04 | **Dhan's data checked before it was trusted.** `tools/dhan_check.py` compared Dhan's expired-options minutes for the NIFTY week that expired on 3 Nov 2026 (28 Oct to 3 Nov) with the same contracts saved from Zerodha by `tools/save_expiring_options.py`: 26,247 minutes across ATM-10 to ATM+10; open interest equal on 99.7%; Dhan's close inside Zerodha's high-low for the minute on 97.5%, exactly equal on 49.9% (Dhan samples the minute at a different moment); typical difference 0.05 points, 95% within 0.70, no lean. Two earlier runs that day mis-set the comparison (a time-alignment rule that cannot see a one-minute shift; 27 Oct, itself an expiry, compared with the wrong contracts) and were corrected in the code before this one | the run's printed output in the session; `tools/dhan_check.py` |
+| 2 | 2026-11-04/05 | **Downloaded**, once, on the runner's machine: NIFTY weekly options, nearest expiry ATM-10 to ATM+10 and next expiry ATM-3 to ATM+3, calls and puts, one-minute candles with OI, IV, strike and spot, 1 Oct 2021 to 4 Nov 2026: 74,424 one-day requests, 0 failed after one retry run; replies kept as sent with their SHA-256 | `state/dhan/rolling/manifest.jsonl` on the runner's machine |
+| 3 | 2026-11-05 | **The holdout, fixed before any of the downloaded history was read.** Exploration may use sessions up to **31 Oct 2024** (before SEBI's November 2024 changes to index options). Sessions from **1 Nov 2024 to 18 Oct 2026** are held back for tests whose rules are written and bound first, each spending a slot of the historical family (PREREGISTRATION_2 section 13: 6 of 10 spent). Later sessions belong to the forward family. `trading/fno/dhan_data.py` refuses a held-back session without a bound registration's SHA-256 and logs every such read to `state/dhan/holdout_reads.log` | `trading/fno/dhan_data.py`, `tests/test_dhan_data.py` |
