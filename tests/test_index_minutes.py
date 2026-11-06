@@ -139,6 +139,32 @@ def test_momentum_exploration_finds_a_planted_effect():
     assert len(small) == 9 and "a test would need" in em.line(small)
 
 
+
+def test_gap_fade_signs_and_thresholds():
+    from research import explore_gap as eg
+    out, d, level = {}, date(2019, 1, 1), 10000.0
+    for i in range(30):
+        while d.weekday() >= 5:
+            d += timedelta(days=1)
+        gap = (0.012, -0.007, 0.002)[i % 3]                    # up 1.2%, down 0.7%, a small one
+        o = level * (1 + gap)
+        m = {}
+        for j in range(375):
+            hm = (datetime.combine(d, dtime(9, 15)) + timedelta(minutes=j)).strftime("%H:%M")
+            lv = o if hm < "09:25" else o * (1 - gap / 2)      # half the gap is given back from 09:25 and holds
+            m[hm] = im.Candle(o if j == 0 else lv, lv, lv, lv)
+        out[d] = m
+        level = m["15:29"].close
+        d += timedelta(days=1)
+    rows = eg.days_of(out)
+    assert len(rows) == 29 and abs(rows[0]["gap"] + 0.007) < 1e-9
+    big = eg.trades(rows, 0.01, "09:20", "15:15")
+    assert len(big) == 9 and all(abs(t["gross_bps"] - 60) < 0.01 for t in big)     # faded 1.2% gaps: 0.6% back
+    some = eg.trades(rows, 0.005, "09:20", "10:15")
+    assert len(some) == 19 and all(t["gross_bps"] > 30 for t in some)
+    late = eg.trades(rows, 0.005, "09:30", "15:15")
+    assert all(abs(t["gross_bps"]) < 1e-6 for t in late) and all(t["net"] < 0 for t in late)   # costs only
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):
