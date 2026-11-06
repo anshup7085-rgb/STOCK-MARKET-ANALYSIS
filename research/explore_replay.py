@@ -13,8 +13,10 @@ stands in for Kite:
 - an option's bid and ask are its close -/+ a half-spread (0.2% of the price, at least one tick),
   with deep touch quantities; there is no real order book in the data;
 - the index is Dhan's spot field, with the day's open, high and low built from the minutes so far;
-- the near-month future is the index itself +/- 0.01% (no futures minutes are in the data; the
-  basis drifts little within a day);
+- the near-month future is the index itself +/- 0.007%, the half-spread our paper trades met (no
+  futures minutes are in the data; the basis drifts little within a day). A first run used 0.01%,
+  which with the tick rounding failed the explorer's own 0.02% spread check, so the futures
+  strategies barely traded;
 - the contract master lists the nearest weekly expiry's strikes Dhan carried that day (ATM +/- 10)
   and the month's future; expiry dates come from NSE's own F&O files (state/vh/raw). A rule that
   names a strike outside ATM +/- 10 finds no quote and the explorer skips it, as it would live.
@@ -53,6 +55,7 @@ REPO = Path(__file__).resolve().parents[1]
 OUT = REPO / "state" / "dhan" / "explore" / "replay.json"
 LOT = 65
 DEPTH = 100_000
+FUT_HALF = 0.00007          # the future's half-spread: our paper legs met a median 1.75 points (tools/fill_quality.py)
 
 
 def tick(x: float, up: bool) -> float:
@@ -108,8 +111,8 @@ class DhanReplayFeed(FnoFeed):
             if c.right == "FUT":
                 s = self.spots.get(hm)
                 if s:
-                    out[c.symbol] = Quote(c.symbol, tick(s * 0.9999, False), tick(s * 1.0001, True), DEPTH, DEPTH, s,
-                                          now, now)
+                    out[c.symbol] = Quote(c.symbol, tick(s * (1 - FUT_HALF), False), tick(s * (1 + FUT_HALF), True),
+                                          DEPTH, DEPTH, s, now, now)
                 continue
             b = dd.at_strike(self.bars, hm, c.strike, "CALL" if c.right == "CE" else "PUT")
             if b is None or b.close <= 0:

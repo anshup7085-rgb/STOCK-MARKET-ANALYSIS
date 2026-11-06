@@ -71,6 +71,8 @@ def test_monthly_expiry_and_the_feed_serves_the_bar_that_just_closed():
     c = next(c for c in feed.master.contracts if c.right == "CE" and c.strike == bars["09:19"][(0, "CALL")].strike)
     quote = feed.quotes([c])[c.symbol]
     assert quote.bid < bars["09:19"][(0, "CALL")].close < quote.ask
+    fq = feed.quotes([feed.fut])[feed.fut.symbol]                      # passes the explorer's 0.02% futures check
+    assert (fq.ask - fq.bid) / ((fq.ask + fq.bid) / 2) <= 0.0002
 
 
 if __name__ == "__main__":
