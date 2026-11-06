@@ -75,6 +75,24 @@ def test_monthly_expiry_and_the_feed_serves_the_bar_that_just_closed():
     assert (fq.ask - fq.bid) / ((fq.ask + fq.bid) / 2) <= 0.0002
 
 
+
+def test_a_chosen_set_of_strategies_and_gross_before_fees():
+    raw = json.loads(Path(DEFAULT_CONFIG).read_text())
+    picked = er.pick_strategies(raw, ["future_breakout", "long_option"])
+    assert [d["name"] for d in picked["strategies"]] == ["future_breakout", "long_option"]
+    assert picked["strategies"][1] == {"name": "long_option", "template": "long_option", "risk_budget": 6000,
+                                       "max_units": 1}
+    assert [d["name"] for d in raw["strategies"]][0] == "future_breakout" and len(raw["strategies"]) > 2
+    try:
+        er.pick_strategies(raw, ["no_such_thing"])
+        raise AssertionError("an unknown strategy was accepted")
+    except SystemExit:
+        pass
+    trades = er.run_day(DAY, _bars(), EXPIRY, FUT_EXPIRY, load_config(whatif_config(picked)), 0.002)
+    assert {t["strategy"] for t in trades} == {"future_breakout", "long_option"}
+    for t in trades:
+        assert t["fees"] > 0 and math.isclose(t["net"], t["gross"] - t["fees"], abs_tol=0.05), t
+
 if __name__ == "__main__":
     import sys
     import traceback

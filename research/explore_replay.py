@@ -3,7 +3,10 @@ EXPLORATION, NOT EVIDENCE: the intraday explorer itself (trading/fno/explore.py)
 through every session of the exploration years (Oct 2021 to Oct 2024) on Dhan's option minutes.
 
     deploy/explore_replay.sh        # in the background, about an hour; or, in the foreground:
-    PYTHONPATH=. .venv/bin/python research/explore_replay.py [--days N] [--spread 0.002]
+    PYTHONPATH=. .venv/bin/python research/explore_replay.py [--days N] [--spread 0.002] [--strategies a,b]
+
+With --strategies, only those run (a library template the configuration lacks joins at one unit) and
+the result goes to replay-<names>.json, leaving the full replay's file as it was.
 
 The explorer's own code decides everything: triggers, strikes, sizing, risk budgets, the position
 and margin limits, stops, targets, the 15:15 square-off, costs. A feed built from Dhan's minutes
@@ -49,6 +52,7 @@ from trading.fno import vh
 from trading.fno.explore import MOCK_SUFFIX, Explorer, load_config
 from trading.fno.explore_cli import DEFAULT_CONFIG, whatif_config
 from trading.fno.feeds import FnoFeed
+from trading.fno.library import TEMPLATES
 from trading.fno.model import ContractMaster, IndexQuote, OptionContract, Quote
 
 REPO = Path(__file__).resolve().parents[1]
@@ -127,6 +131,18 @@ class DhanReplayFeed(FnoFeed):
         return None
 
 
+def pick_strategies(raw: dict, names: list[str]) -> dict:
+    """The configuration with only `names`; a template from the library that the configuration lacks
+    joins with a Rs6,000 risk budget and one unit, as the configured futures strategies have."""
+    out = json.loads(json.dumps(raw))
+    have = {d["name"]: d for d in out.get("strategies", [])}
+    unknown = [n for n in names if n not in have and n not in TEMPLATES]
+    if unknown:
+        raise SystemExit(f"no such strategy or template: {', '.join(unknown)}")
+    out["strategies"] = [have.get(n) or {"name": n, "template": n, "risk_budget": 6000, "max_units": 1} for n in names]
+    return out
+
+
 def monthly_expiry(chain: list[date], day: date) -> date | None:
     """The month's last weekly expiry on or after `day`: the NIFTY monthly, and the futures' expiry."""
     for e in chain:
@@ -163,6 +179,8 @@ def run_day(day: date, bars: dict, expiry: date, fut_expiry: date, cfg, half: fl
                 trades.append({"day": day.isoformat(), "strategy": e["strategy"], "direction": e["direction"],
                                "opened": e["t"][11:16], "closed": p["t"][11:16], "reason": p["reason"],
                                "risk": e["risk"], "net": p["net"], "R": p["R"],
+                               "gross": p.get("gross"),
+                               "fees": round(e.get("entry_costs", 0.0) + (p.get("exit_costs") or 0.0), 2),
                                "margin_est": e.get("margin_est")})
         return trades
     finally:
@@ -185,6 +203,10 @@ def report(trades: list[dict], left: dict[str, int]) -> list[str]:
         wins = sum(n > 0 for n in nets)
         lines.append(f"  {name:<16} {len(ts):4d} trades, won {wins / len(ts):4.0%}, mean R {sum(t['R'] for t in ts) / len(ts):+.3f}, "
                      f"net Rs{sum(nets):+10,.0f}, worst stretch Rs{worst:,.0f}")
+        if all(t.get("gross") is not None for t in ts):
+            g, f = sum(t["gross"] for t in ts), sum(t["fees"] for t in ts)
+            lines.append(f"      before fees Rs{g:+,.0f} (the spread already paid in the fills); fees Rs{f:,.0f}, "
+                         f"Rs{f / len(ts):,.0f} a trade")
         dte: dict[str, float] = defaultdict(float)
         cnt: dict[str, int] = defaultdict(int)
         yrs: dict[str, float] = defaultdict(float)
@@ -204,8 +226,14 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="the explorer replayed on Dhan's minutes (exploration)")
     ap.add_argument("--days", type=int, default=0, help="only the first N sessions (a quick check)")
     ap.add_argument("--spread", type=float, default=0.002, help="half-spread as a fraction of the price")
+    ap.add_argument("--strategies", default="", help="only these, comma-separated; a library template not in "
+                    "the configuration joins at a Rs6,000 risk budget and one unit (e.g. long_option)")
     args = ap.parse_args()
     raw = json.loads(Path(DEFAULT_CONFIG).read_text())
+    out = OUT
+    if args.strategies:
+        raw = pick_strategies(raw, [s.strip() for s in args.strategies.split(",") if s.strip()])
+        out = OUT.with_name(f"replay-{'+'.join(d['name'] for d in raw['strategies'])}.json")
     books = {"explorer": load_config(raw), "what-if": load_config(whatif_config(raw))}
     archive = vh.Archive(vh.RAW)
     chain = vh.weekly_chain(archive.expiries())
@@ -234,11 +262,11 @@ def main() -> int:
         lines.append(f"\n{name} book ({'limits as configured' if name == 'explorer' else 'every signal, 1 unit, no limits'}):")
         lines += report(trades[name], left)
     print("\n".join(lines), flush=True)
-    OUT.parent.mkdir(parents=True, exist_ok=True)
-    OUT.write_text(json.dumps({"written": datetime.now().isoformat(timespec="seconds"), "spread": args.spread,
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps({"written": datetime.now().isoformat(timespec="seconds"), "spread": args.spread,
                                "sessions": len(days), "left_to_expiry": left, "trades": trades,
                                "summary": lines}, indent=1))
-    print(f"saved: {OUT}", flush=True)
+    print(f"saved: {out}", flush=True)
     return 0
 
 
