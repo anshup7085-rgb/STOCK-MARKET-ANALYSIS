@@ -201,6 +201,12 @@ def main() -> int:
         lines = [x for x in saved.read_text(errors="replace").splitlines() if x.strip()]
         print("\n--- option minutes saved for our own history ---")
         print("\n".join(lines[-4:]) if lines else "nothing logged yet")
+    idx = REPO / "logs" / f"index-minutes-{day}.log"
+    if idx.exists():
+        lines = [x for x in idx.read_text(errors="replace").splitlines() if x.startswith("index minutes")
+                 or "failed" in x]
+        print("\n--- NIFTY and VIX minutes saved (counts only) ---")
+        print("\n".join(lines[-4:]) if lines else "still running, or nothing logged yet")
     check = REPO / "logs" / f"kite-history-check-{day}.log"
     if check.exists():
         print("\n--- Kite historical data check (one time; counts and dates only) ---")
