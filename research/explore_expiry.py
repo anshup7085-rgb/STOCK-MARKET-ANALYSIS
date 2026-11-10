@@ -44,11 +44,12 @@ STRUCTURES = ("straddle", "iron fly +/-300")
 SLIP = 1.5
 
 
-def _cost(px: float, side: str) -> float:
-    return option_order_costs(px, LOT, side, FNO_ZERODHA).total
+def _cost(px: float, side: str, lot: int = LOT) -> float:
+    return option_order_costs(px, lot, side, FNO_ZERODHA).total
 
 
-def replay(day_bars: dict, entry_bar: str, stop_frac: float, structure: str, h) -> dict | None:
+def replay(day_bars: dict, entry_bar: str, stop_frac: float, structure: str, h, lot: int = LOT,
+           wing: float = WING) -> dict | None:
     first = day_bars.get(entry_bar, {})
     ce0 = first.get((0, "CALL"))
     if ce0 is None:
@@ -56,7 +57,7 @@ def replay(day_bars: dict, entry_bar: str, stop_frac: float, structure: str, h) 
     k = ce0.strike
     legs = [("CALL", k, "SELL"), ("PUT", k, "SELL")]
     if structure != "straddle":
-        legs += [("CALL", k + WING, "BUY"), ("PUT", k - WING, "BUY")]
+        legs += [("CALL", k + wing, "BUY"), ("PUT", k - wing, "BUY")]
     fills, last = {}, {}
     for right, strike, side in legs:
         b = dd.at_strike(day_bars, entry_bar, strike, right)
@@ -68,13 +69,13 @@ def replay(day_bars: dict, entry_bar: str, stop_frac: float, structure: str, h) 
         fills[(right, strike)] = (side, px)
         last[(right, strike)] = b.close
     credit_pts = sum(px if side == "SELL" else -px for side, px in fills.values())
-    credit = credit_pts * LOT
+    credit = credit_pts * lot
     if credit <= 0:
         return None
-    cin = sum(_cost(px, side) for side, px in fills.values())
-    cout_est = sum(_cost(px, "BUY" if side == "SELL" else "SELL") for side, px in fills.values())
+    cin = sum(_cost(px, side, lot) for side, px in fills.values())
+    cout_est = sum(_cost(px, "BUY" if side == "SELL" else "SELL", lot) for side, px in fills.values())
     stop = stop_frac * credit
-    risk = ((WING - credit_pts) * LOT + cin + cout_est) if structure != "straddle" else (stop * SLIP + cin + cout_est)
+    risk = ((wing - credit_pts) * lot + cin + cout_est) if structure != "straddle" else (stop * SLIP + cin + cout_est)
     start = datetime.strptime(entry_bar, "%H:%M")
     path = [m for m in minutes("09:15", LAST_BAR) if datetime.strptime(m, "%H:%M") > start]
     net, exit_at, reason, carried = 0.0, LAST_BAR, "time", 0
@@ -91,8 +92,8 @@ def replay(day_bars: dict, entry_bar: str, stop_frac: float, structure: str, h) 
             close_px = tick(x + h(x), True) if side == "SELL" else max(0.0, tick(x - h(x), False))
             gross += (px - close_px) if side == "SELL" else (close_px - px)
             if close_px > 0:
-                cout += _cost(close_px, "BUY" if side == "SELL" else "SELL")
-        net = gross * LOT - cin - cout
+                cout += _cost(close_px, "BUY" if side == "SELL" else "SELL", lot)
+        net = gross * lot - cin - cout
         if net <= -stop:
             exit_at, reason = hm, "stop"
             break
