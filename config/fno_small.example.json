@@ -1,0 +1,17 @@
+{
+  "note": "THE SMALL BOOK: a paper book the size of the holder's real capital, Rs20,000, run beside the explorer on the same feed (state/fno_small). Only bought options fit that capital, so every strategy here buys one lot. EXPLORATION, NOT EVIDENCE. To change it, copy this file to config/fno_small.json (gitignored, read first).",
+  "underlying": "NIFTY",
+  "capital": 20000,
+  "daily_loss_limit": 2000,
+  "max_open": 2,
+  "max_margin_frac": 0.8,
+  "square_off": "15:15",
+  "screen_alpha": 0.05,
+  "quotes": {"max_age_s": 60, "spread_abs": 1.0, "spread_frac": 0.10, "fut_spread_frac": 0.0002, "window_steps": 15},
+  "strategies": [
+    {"name": "long_cheap", "template": "long_cheap", "risk_budget": 4500, "max_units": 1},
+    {"name": "late_momentum", "template": "late_momentum", "risk_budget": 4500, "max_units": 1},
+    {"name": "long_option", "template": "long_option", "risk_budget": 12000, "max_units": 1,
+     "exit": {"stop": {"R": 0.2}, "target": {"R": 0.4}}}
+  ]
+}

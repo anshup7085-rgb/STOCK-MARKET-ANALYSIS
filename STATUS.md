@@ -14,8 +14,9 @@ document is out of date.
 - **What that means for risk.** One lot is the smallest trade there is. A normal stop on a bought option
   loses ₹1,300–4,000, which is 6–20% of the account in one trade. So the account cannot yet be sized
   safely; real money waits for a tested edge **and** a size the account can carry.
-- **The paper explorer still runs a ₹5,00,000 book** from before this was known. A ₹20,000 option-buying
-  book replaces it once the replays below say which strategies deserve a place.
+- **The small book** (`config/fno_small.example.json`, from 10 Nov): a paper book of exactly ₹20,000 that
+  buys one option lot at a time, with a day's loss limit of ₹2,000. It runs beside the older ₹5,00,000
+  explorer and is the part of the evening report that shows what the real account could have done.
 
 ## What runs every trading day (the holder types `morning` by 09:10, `deploy/evening.sh` after the close)
 
@@ -23,6 +24,7 @@ document is out of date.
 |---|---|---|
 | Intraday explorer, paper | `trading/fno/explore.py` | Running since 26 Oct. Exploration, not evidence |
 | What-if book (every signal, one lot) | `state/fno_whatif` | Running |
+| **The small book: ₹20,000, bought options only**, paper | `state/fno_small` | Starts on the next `morning` |
 | Strategy V, paper (weekly iron condor) | `trading/fno/strategy_v.py` | Running as a cost and fill measurement only; V never goes live (V-H failed) |
 | Market context recorder (FII positions, VIX, option OI) | `trading/fno/context.py` | Running |
 | Option minutes of expiring contracts, saved from Kite | `tools/save_expiring_options.py` | Running |

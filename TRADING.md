@@ -502,6 +502,14 @@ eval "$(.venv/bin/python tools/kite_session.py --eval)"   # today's login, by ha
 deploy/fno_day.sh        # both runners in tmux, logging to logs/
 ```
 
+**The small book.** Beside the explorer and the what-if book, the runner keeps a third paper
+book the size of the holder's real capital: ₹20,000, in `state/fno_small`, from
+`config/fno_small.example.json` (copy it to `config/fno_small.json` to change it). That capital
+cannot sell an option or hold a future, so its strategies only buy one option lot: a cheap
+out-of-the-money option on the opening-range breakout, the same on a 0.5% move by 14:30, and
+the at-the-money option with a tight stop. It stops for the day after a ₹2,000 loss. The
+evening report shows it in its own section. `fno explore run --no-small` turns it off.
+
 **What to expect.**
 
 - **Costs are large.** At the 2026 fee card, a one-lot NIFTY futures round trip

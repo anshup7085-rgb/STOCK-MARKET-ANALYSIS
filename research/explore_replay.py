@@ -4,6 +4,7 @@ through every session of the exploration years (Oct 2021 to Oct 2024) on Dhan's 
 
     deploy/explore_replay.sh        # in the background, about an hour; or, in the foreground:
     PYTHONPATH=. .venv/bin/python research/explore_replay.py [--days N] [--spread 0.002] [--strategies a,b]
+                                                              [--config config/fno_small.example.json]
 
 With --strategies, only those run (a library template the configuration lacks joins at one unit) and
 the result goes to replay-<names>.json, leaving the full replay's file as it was.
@@ -222,15 +223,33 @@ def report(trades: list[dict], left: dict[str, int]) -> list[str]:
     return lines
 
 
+def book_line(trades: list[dict], capital: float) -> str:
+    """The whole book as one account: where the capital ends, and the lowest it ever stood."""
+    eq = low = capital
+    low_day = None
+    for t in sorted(trades, key=lambda t: (t["day"], t["closed"])):
+        eq += t["net"]
+        if eq < low:
+            low, low_day = eq, t["day"]
+    years: dict[str, float] = defaultdict(float)
+    for t in trades:
+        years[t["day"][:4]] += t["net"]
+    return (f"  the whole book as one account: Rs{capital:,.0f} ends at Rs{eq:,.0f} after {len(trades)} trades; "
+            f"its lowest point Rs{low:,.0f}" + (f" on {low_day}" if low_day else "") + "; by year "
+            + "; ".join(f"{y} Rs{v:+,.0f}" for y, v in sorted(years.items())))
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="the explorer replayed on Dhan's minutes (exploration)")
     ap.add_argument("--days", type=int, default=0, help="only the first N sessions (a quick check)")
     ap.add_argument("--spread", type=float, default=0.002, help="half-spread as a fraction of the price")
     ap.add_argument("--strategies", default="", help="only these, comma-separated; a library template not in "
                     "the configuration joins at a Rs6,000 risk budget and one unit (e.g. long_option)")
+    ap.add_argument("--config", default="", help="replay this configuration instead of the explorer's "
+                    "(e.g. config/fno_small.example.json, the Rs20,000 book); the result goes to replay-<file>.json")
     args = ap.parse_args()
-    raw = json.loads(Path(DEFAULT_CONFIG).read_text())
-    out = OUT
+    raw = json.loads(Path(args.config or DEFAULT_CONFIG).read_text())
+    out = OUT.with_name(f"replay-{Path(args.config).name.split('.')[0]}.json") if args.config else OUT
     if args.strategies:
         raw = pick_strategies(raw, [s.strip() for s in args.strategies.split(",") if s.strip()])
         out = OUT.with_name(f"replay-{'+'.join(d['name'] for d in raw['strategies'])}.json")
@@ -261,6 +280,8 @@ def main() -> int:
     for name in books:
         lines.append(f"\n{name} book ({'limits as configured' if name == 'explorer' else 'every signal, 1 unit, no limits'}):")
         lines += report(trades[name], left)
+        if name == "explorer" and trades[name]:
+            lines.append(book_line(trades[name], books[name].capital))
     print("\n".join(lines), flush=True)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps({"written": datetime.now().isoformat(timespec="seconds"), "spread": args.spread,

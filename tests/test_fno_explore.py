@@ -557,6 +557,29 @@ def test_the_brokers_margin_figure_decides_when_there_is_one():
     assert margin_held(3250.0, {"initial": 1.0, "final": 35000}) == (35000.0, "the broker's figure")
 
 
+def test_the_small_book_buys_only_and_fits_the_real_capital():
+    from trading.fno.explore_cli import small_config_path, small_dir
+    cfg = load_config(small_config_path())
+    assert cfg.capital == 20_000 and cfg.daily_loss_limit == 2_000 and cfg.max_open == 2
+    assert small_dir().name == "fno_small"
+    for s in cfg.strategies:                                   # every leg is bought: nothing here needs margin
+        assert all(sp.side == "BUY" and sp.kind in ("CE", "PE") for specs in s.legs.values() for sp in specs), s.name
+        assert s.max_units == 1 and s.risk_budget <= 0.8 * cfg.capital
+    # on scripted prices the cheap call (Rs60 or under) is bought, one lot, and its cost fits the book
+    cheap = {"name": "long_cheap", "template": "long_cheap", "risk_budget": 4500, "max_units": 1,
+             "legs": "CE+@PREM:60", "trigger": {"type": "at"}, "window": ["09:20", "14:00"]}
+    ex, clock, feed = scripted([cheap], capital=20_000, daily_loss_limit=2_000, max_open=2)
+    for k in range(25000, 25600, 50):
+        mid = max(5.0, 120.0 - (k - 25000) * 0.3)
+        feed.prices[f"N{WK:%m%d}{k}CE"] = (mid - 0.25, mid + 0.25)
+    rep = at(ex, clock, 9, 20)
+    assert ex.state().open, rep.skips
+    e = next(iter(ex.state().open.values()))
+    leg = e["legs"][0]
+    assert leg["side"] == "BUY" and leg["lots"] == 1 and leg["price"] <= 60.5 and e["defined"]
+    assert leg["price"] * LOT <= 0.8 * 20_000 and e["risk"] <= 4500
+
+
 def test_a_changed_configuration_starts_a_new_generation_and_the_screen_restarts():
     ex, clock, feed = scripted()
     at(ex, clock, 9, 20)

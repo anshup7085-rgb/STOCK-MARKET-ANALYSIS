@@ -93,6 +93,20 @@ def test_a_chosen_set_of_strategies_and_gross_before_fees():
     for t in trades:
         assert t["fees"] > 0 and math.isclose(t["net"], t["gross"] - t["fees"], abs_tol=0.05), t
 
+
+def test_the_small_book_replays_within_its_capital():
+    raw = json.loads((Path(DEFAULT_CONFIG).parent / "fno_small.example.json").read_text())
+    trades = er.run_day(DAY, _bars(), EXPIRY, FUT_EXPIRY, load_config(raw), 0.002)
+    assert trades and {t["strategy"] for t in trades} <= {"long_cheap", "late_momentum", "long_option"}
+    for t in trades:                                           # one bought lot each: the premium is the risk
+        assert t["risk"] <= 12_000 and t["margin_est"] <= 0.8 * 20_000, t
+    assert sum(t["net"] for t in trades) >= -2_000 - 500       # the day's loss limit, give or take one fill
+    line = er.book_line([{"day": "2022-03-02", "closed": "10:00", "net": -3000.0},
+                         {"day": "2022-03-03", "closed": "10:00", "net": 5000.0}], 20_000)
+    assert "ends at Rs22,000 after 2 trades" in line and "lowest point Rs17,000 on 2022-03-02" in line, line
+    assert "2022 Rs+2,000" in line
+
+
 if __name__ == "__main__":
     import sys
     import traceback

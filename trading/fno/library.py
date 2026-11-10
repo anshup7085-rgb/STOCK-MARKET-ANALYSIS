@@ -85,6 +85,22 @@ TEMPLATES: dict[str, dict] = {
         "trigger": ORB, "window": ["09:31", "13:00"],
         "exit": {"stop": {"R": 0.4}, "target": {"R": 0.8}},
     },
+    "long_cheap": {
+        "about": "A cheaper, out-of-the-money call on an upside breakout, put on a downside one: the strike "
+                 "whose premium is the highest at or below Rs60, about Rs3,900 a lot. Risk is the premium. "
+                 "Sized for a small account.",
+        "legs": {"long": "CE+@PREM:60", "short": "PE+@PREM:60"},
+        "trigger": ORB, "window": ["09:31", "13:00"],
+        "exit": {"stop": {"R": 0.4}, "target": {"R": 0.8}},
+    },
+    "late_momentum": {
+        "about": "If the index is 0.5% or more from its open at 14:30, a cheap call in that direction (a put "
+                 "if it is down), held to the square-off: the day's move carried into the close. Risk is the "
+                 "premium.",
+        "legs": {"long": "CE+@PREM:60", "short": "PE+@PREM:60"},
+        "trigger": {"type": "move", "pct": 0.5}, "window": ["14:30", "14:45"],
+        "exit": {"stop": {"R": 0.4}, "target": {"R": 0.8}},
+    },
     # -- non-directional ------------------------------------------------------------------
     "short_straddle": {
         "about": "Sell the at-the-money straddle shortly after the open and hold to the square-off unless the "

@@ -10,6 +10,7 @@ venv/
 !package.json
 !data/nse_holidays.json
 !config/fno_strategies.example.json
+!config/fno_small.example.json
 scans/
 # trading books, journals, kill switches and policies: account data, never committed
 state/

@@ -65,6 +65,32 @@ def test_money_lines():
     assert "Rs-4,486 (-0.90%) over 1 week(s)" in vline and "Rs58,000" in vline, vline
 
 
+def test_the_small_book_section():
+    root = Path(tempfile.mkdtemp())
+    sm = root / "state" / "fno_small"
+    sm.mkdir(parents=True)
+    env = {**os.environ, "FNO_REPORT_ROOT": str(root), "PYTHONPATH": str(ROOT)}
+    day = "2026-11-12"
+    run = lambda: subprocess.run([sys.executable, str(ROOT / "tools" / "day_report.py"), day],       # noqa: E731
+                                 capture_output=True, text=True, env=env).stdout
+    j = Journal(sm / "journal.jsonl", "fno-explore")
+    j.append("XP_INIT", "2026-11-11", capital=20000.0, feed_name="x", fee_card="x", note="")
+    j.append("XP_ENTRY", "2026-11-11", id="long_cheap-2026-11-11-1", strategy="long_cheap", day="2026-11-11",
+             direction="long", t="2026-11-11T09:40:00+05:30", risk=3980.0, margin_est=3900.0, entry_costs=30.0,
+             broker_margin=None, legs=[{"side": "BUY", "lots": 1, "qty": 65, "symbol": "N1124800CE", "price": 60.0}])
+    _exit(j, "2026-11-11", "11:00", "long_cheap-2026-11-11-1", -1650.0)
+    j.append("XP_ENTRY", day, id="late_momentum-2026-11-12-1", strategy="late_momentum", day=day,
+             direction="short", t=f"{day}T14:31:00+05:30", risk=3700.0, margin_est=3640.0, entry_costs=30.0,
+             broker_margin=None, legs=[{"side": "BUY", "lots": 1, "qty": 65, "symbol": "N1124500PE", "price": 56.0}])
+    _exit(j, day, "15:15", "late_momentum-2026-11-12-1", 900.0)
+    out = run()
+    assert "--- the small book: Rs20,000" in out
+    assert "14:31 BUY   late_momentum (short): +1xN1124500PE@56; paid Rs3,640" in out, out
+    assert "today: 1 trade(s), net Rs+900 (+4.5% of Rs20,000)" in out, out
+    assert "since 2026-11-11: 2 trade(s), net Rs-750; the Rs20,000 would now be Rs19,250" in out, out
+    assert "small book: verifies" in out
+
+
 if __name__ == "__main__":
     import traceback
 

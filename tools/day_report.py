@@ -26,6 +26,7 @@ from trading.journal import Journal, verify_file
 REPO = Path(os.environ.get("FNO_REPORT_ROOT") or Path(__file__).resolve().parents[1])   # the override is for tests
 EXPLORE, V = REPO / "state" / "fno_explore", REPO / "state" / "paper_fno"
 WHATIF = REPO / "state" / "fno_whatif"
+SMALL = REPO / "state" / "fno_small"
 ON_TIME = "09:10"                                    # the agreed latest start
 ERROR_WORDS = ("Traceback", "Error", "[refused]", "failed", "pass failed")
 
@@ -145,6 +146,40 @@ def whatif(day: str) -> list[str]:
     return out
 
 
+def small(day: str) -> list[str]:
+    """The small book: the holder's real capital, one bought option at a time. Paper."""
+    path = SMALL / "journal.jsonl"
+    if not path.exists():
+        return ["no small book yet (it starts with the next `morning`)"]
+    recs = Journal(path, "fno-explore").records()
+    today = [r for r in recs if r.get("asof") == day]
+    out = []
+    for r in today:
+        p = r["payload"]
+        if r["type"] == "XP_ENTRY":
+            legs = " ".join(f"{'+' if g['side'] == 'BUY' else '-'}{g['lots']}x{g['symbol']}@{g['price']:g}"
+                            for g in p["legs"])
+            paid = sum(g["price"] * g["qty"] for g in p["legs"] if g["side"] == "BUY")
+            out.append(f"  {_hm(p['t'])} BUY   {p['strategy']} ({p['direction']}): {legs}; paid Rs{paid:,.0f}")
+        elif r["type"] == "XP_EXIT":
+            out.append(f"  {_hm(p['t'])} CLOSE {p['id']} ({p['reason']}): net Rs{p['net']:+,.0f}")
+        elif r["type"] == "XP_HALT":
+            out.append(f"  STOPPED FOR THE DAY: the loss reached Rs{-p['pnl']:,.0f}")
+    init = next((r for r in recs if r["type"] == "XP_INIT"), None)
+    cap = float((init or {}).get("payload", {}).get("capital") or 20_000)
+    nets = [r["payload"]["net"] for r in today if r["type"] == "XP_EXIT"]
+    total = sum(r["payload"]["net"] for r in recs if r["type"] == "XP_EXIT")
+    count = sum(1 for r in recs if r["type"] == "XP_EXIT")
+    out.append(f"today: {len(nets)} trade(s), net Rs{sum(nets):+,.0f} ({sum(nets) / cap:+.1%} of Rs{cap:,.0f})")
+    out.append(f"since {(init or {}).get('asof', '?')}: {count} trade(s), net Rs{total:+,.0f}; the Rs{cap:,.0f} "
+               f"would now be Rs{cap + total:,.0f}")
+    skips = sorted({f"{r['payload']['strategy']}: {r['payload']['detail'][:70]}" for r in today
+                    if r["type"] == "XP_SKIP"})
+    if skips and not nets:
+        out.append("why nothing traded: " + " | ".join(skips[:3]))
+    return out
+
+
 def strategy_v(day: str) -> list[str]:
     path = V / "journal.jsonl"
     if not path.exists():
@@ -192,6 +227,8 @@ def main() -> int:
     print("\n".join(explorer(day)))
     print("\n--- what-if (every signal, 1 lot, no budget or position limits; not the test) ---")
     print("\n".join(whatif(day)))
+    print("\n--- the small book: Rs20,000, bought options only (paper; the size of the real account) ---")
+    print("\n".join(small(day)))
     print("\n--- market context (recorded for later tests; not used to trade) ---")
     print("\n".join(summary(read_day(REPO, day))))
     print("\n--- strategy V ---")
@@ -212,7 +249,7 @@ def main() -> int:
         print("\n--- Kite historical data check (one time; counts and dates only) ---")
         print(check.read_text(errors="replace").strip()[:4000])
     print("\n--- journals ---")
-    for name, d in (("explorer", EXPLORE), ("what-if", WHATIF), ("V", V)):
+    for name, d in (("explorer", EXPLORE), ("what-if", WHATIF), ("small book", SMALL), ("V", V)):
         p = d / "journal.jsonl"
         if p.exists():
             vr = verify_file(p)

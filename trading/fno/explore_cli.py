@@ -46,6 +46,15 @@ def whatif_dir() -> Path:
     return REPO_ROOT / "state" / "fno_whatif"
 
 
+def small_dir() -> Path:
+    return REPO_ROOT / "state" / "fno_small"
+
+
+def small_config_path() -> Path:
+    own = REPO_ROOT / "config" / "fno_small.json"
+    return own if own.exists() else REPO_ROOT / "config" / "fno_small.example.json"
+
+
 def whatif_config(raw: dict) -> dict:
     """The what-if book: the same strategies at one unit each, with no risk budget, position, margin
     or day-loss limit, so every signal trades. It answers "what if every trade had been taken";
@@ -155,13 +164,28 @@ def _whatif(ex: Explorer) -> Explorer | None:
         return None
 
 
+def _small(ex: Explorer) -> Explorer | None:
+    """The small book (the holder's real capital, bought options only) on the explorer's own feed, or
+    None if it cannot start: it must never stop the explorer."""
+    try:
+        sm = Explorer(ex.feed, small_dir(), load_config(small_config_path()))
+        if not sm.journal.records():
+            sm.init()
+        return sm
+    except Exception as exc:
+        print(f"[small book failed to start] {type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
+        return None
+
+
 def cmd_run(args) -> int:
     ex = _explorer(args)
     wi = _whatif(ex) if args.whatif else None
+    sm = _small(ex) if args.small else None
     until = time.fromisoformat(args.until)
     print(f"explorer running: one pass every {args.every}s until {until:%H:%M}. Ctrl-C stops it; "
           f"open positions are then closed at the next run's first pass or booked at their last mark."
-          + (" A what-if book (every signal, 1 unit, no limits) runs alongside." if wi else ""))
+          + (" A what-if book (every signal, 1 unit, no limits) runs alongside." if wi else "")
+          + (f" The small book (Rs{sm.cfg.capital:,.0f}, bought options) runs alongside." if sm else ""))
     while datetime.now(IST).time() < until:
         try:
             rep = ex.run_pass()
@@ -178,6 +202,13 @@ def cmd_run(args) -> int:
                     print("[what-if] " + rep.text().replace("\n", "\n[what-if] "), flush=True)
             except Exception as exc:
                 print(f"[what-if pass failed] {type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
+        if sm is not None:
+            try:
+                rep = sm.run_pass()
+                if rep.entries or rep.exits:
+                    print("[small] " + rep.text().replace("\n", "\n[small] "), flush=True)
+            except Exception as exc:
+                print(f"[small book pass failed] {type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
         now = _time.time()
         _time.sleep(args.every - now % args.every + 2)
     print(format_scoreboard(scoreboard(ex.journal.records())))
@@ -257,6 +288,8 @@ def add_explore(fs) -> None:
     q.add_argument("--until", default="15:30")
     q.add_argument("--no-whatif", dest="whatif", action="store_false",
                    help="do not run the what-if book (every signal at 1 unit, no limits) alongside")
+    q.add_argument("--no-small", dest="small", action="store_false",
+                   help="do not run the small book (the holder's real capital, bought options) alongside")
     q.set_defaults(fn=cmd_run)
     q = xs.add_parser("status"); q.set_defaults(fn=cmd_status)
     q = xs.add_parser("report"); q.add_argument("--json", dest="json_out", default=None)
