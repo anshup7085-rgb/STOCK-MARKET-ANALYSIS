@@ -55,5 +55,7 @@ Nothing has a measured edge. The correct trading output today is **NO TRADE**.
 5. **A daily check of the simulator** against what the paper book really did.
 6. **The live order path** only after something passes: today `trading/fno/` cannot place an order.
 
+**Can this reach the goal at all?** The audit against SEBI's studies and our own results: `research/AUDIT_2026-11-10.md`. In short: ₹2,000 a day on ₹20,000 is 10% a day and is not reachable in any market; intraday F&O at this size is very unlikely to pay even a little; four tests remain and finish by about 4 Dec, and the holder decides then.
+
 The full review behind this list: `research/REVIEW_2026-11-10.md`. Every step is logged in
 `research/INTRADAY_LOG.md`. What could help and what it costs: `research/OPPORTUNITY_MAP.md`.
