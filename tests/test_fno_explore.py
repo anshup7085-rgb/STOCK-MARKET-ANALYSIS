@@ -18,7 +18,7 @@ import pandas as pd
 from market.calendar import TradingCalendar
 from market.charges import FNO_ZERODHA, futures_order_costs, option_order_costs
 from market.config import IST
-from trading.fno.explore import (STOP_SLIP, Explorer, _day_figures, Refused, Trigger, build, fire, load_config, quote_problem,
+from trading.fno.explore import (STOP_SLIP, Explorer, margin_held, _day_figures, Refused, Trigger, build, fire, load_config, quote_problem,
                                  resolve, scoreboard, size, spec_defined)
 from trading.fno.feeds import FnoFeed, MockIntradayFeed
 from trading.fno.model import (ContractMaster, IndexQuote, OptionContract, Quote, futures_from_groww_frame,
@@ -529,6 +529,32 @@ def test_margin_room_limits_entries():
     feed.prices.update({f"N{WK:%m%d}25000PE": (110.0, 110.5)})
     rep = at(ex, clock, 9, 20)                                # needs ~1.95 lakh against 1.6 lakh of room
     assert not ex.state().open and any("margin" in s for s in rep.skips)
+
+
+def test_the_brokers_margin_figure_decides_when_there_is_one():
+    # the spread's own estimate is its worst loss (about Rs3,250); the broker blocks ten times that
+    ex, clock, feed = scripted(capital=30_000)
+    asked = []
+    feed.margin_for = lambda orders: asked.append(1) or {"initial": 36000.0, "final": 35000.0}
+    rep = at(ex, clock, 9, 20)                                # Rs35,000 against 80% of Rs30,000
+    assert not ex.state().open and any("the broker's figure" in s for s in rep.skips)
+    at(ex, clock, 9, 21)
+    at(ex, clock, 9, 25)
+    assert len(asked) == 1                                    # not asked again for ten minutes
+    at(ex, clock, 9, 31)
+    assert len(asked) == 2 and not ex.state().open
+    feed.margin_for = lambda orders: {"initial": 21000.0, "final": 20000.0}
+    at(ex, clock, 9, 42)
+    assert len(ex.state().open) == 1                          # Rs20,000 fits in Rs24,000
+    # an open position is counted at the broker's figure too: a second strategy finds no room
+    second = dict(SPREAD, name="bull2")
+    ex2, clock2, feed2 = scripted([SPREAD, second], capital=50_000)
+    feed2.margin_for = lambda orders: {"initial": 26000.0, "final": 25000.0}
+    rep2 = at(ex2, clock2, 9, 20)
+    assert len(ex2.state().open) == 1 and any("margin" in s for s in rep2.skips)
+    assert margin_held(3250.0, None) == (3250.0, "an estimate")
+    assert margin_held(3250.0, {"error": "down"}) == (3250.0, "an estimate")
+    assert margin_held(3250.0, {"initial": 1.0, "final": 35000}) == (35000.0, "the broker's figure")
 
 
 def test_a_changed_configuration_starts_a_new_generation_and_the_screen_restarts():

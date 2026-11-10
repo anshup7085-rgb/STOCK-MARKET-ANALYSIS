@@ -1,7 +1,8 @@
 # Roadmap
 
 Where this project is, where it goes, and — the part that matters — what
-evidence is required before it touches money.
+evidence is required before it touches money. **Today's state is in `STATUS.md`;**
+the gates and kill criteria below still bind.
 
 ## Where we are
 
@@ -72,10 +73,10 @@ becomes negotiable.
 
 ## Horizons
 
-**Now (days)**
-- Unblock a market feed, or accept that we are building blind
-- Run the backtest on real NSE history and publish the number, whatever it is
-- Write the first `catalysts.json` by hand, with sources and dates
+**Now (days)** — as of 10 Nov 2026, see `STATUS.md`, "Next, in order"
+- ~~Unblock a market feed~~ — done 17 Oct (Yahoo), 26 Oct (Kite), 4 Nov (Dhan)
+- ~~Run the backtest on real NSE history and publish the number~~ — done 17 Oct: failed
+- Intraday F&O: more index data, replication of the expiry-day effect, the buyer's side
 
 **Next (weeks)**
 - Sector rotation and breadth, so the regime call stops resting on one index
@@ -109,7 +110,10 @@ available. Abandon the scoring model as a ranking tool if:
 A negative result is not a wasted project. It is the most valuable thing this
 system can tell you, and it is built to be able to say it.
 
-## The current blocker
+## The blocker of October 2026 (resolved; kept as the record)
+
+Resolved: Yahoo was allowlisted on 17 Oct; the server in Mumbai reads Kite (from 26 Oct), NSE's
+archives and Dhan directly. What follows is the note as written then.
 
 No market feed is reachable. Yahoo, NSE and BSE all return 403 to the egress
 gateway; a headless Chromium hits the identical wall, and a no-proxy request

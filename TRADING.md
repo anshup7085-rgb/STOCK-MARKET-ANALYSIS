@@ -442,7 +442,11 @@ themselves. Otherwise the trigger does not fire.
      rupees or a multiple of the credit.
 4. **Size.** The most units the strategy's budget allows, capped by the freeze
    quantity.
-5. **Margin** (an estimate, not the broker's figure) must fit in 80% of capital.
+5. **Margin** must fit in 80% of capital. The broker's own figure for the order
+   (Zerodha's basket margin, read-only) decides when it is available; otherwise an
+   estimate does. The estimate for a spread is only its worst loss, far below what
+   a broker blocks, so until 10 Nov 2026, when the estimate alone decided, the
+   paper book used up to 94% of its capital by Zerodha's figures.
 6. **Fill at the touch:** buy at the ask, sell at the bid.
 7. **Mark and exit every pass, at the touch, net of every cost.** A position
    closes on the first of:
@@ -510,9 +514,10 @@ deploy/fno_day.sh        # both runners in tmux, logging to logs/
 
 ## Known gaps — read before trusting it
 
-- **The strategy is unvalidated.** Gate 1 has not been run on real data. Paper
-  trading can start now because it costs nothing, but its results are not
-  validation until Gate 1 passes.
+- **No strategy is validated.** Gate 1 ran on real data on 17 Oct 2026 and the
+  equity score failed it; V-H failed on 31 Oct; no intraday strategy has passed a
+  registered test. Paper trading costs nothing, but its results are not
+  validation. Today's state: `STATUS.md`.
 - **Gaps through the stop.** Sizing caps the loss *at the stop*. A gap through it
   loses more, and a gap through the stop-limit leaves the position open until the
   emergency exit fills.

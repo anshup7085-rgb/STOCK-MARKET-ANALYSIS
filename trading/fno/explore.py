@@ -44,7 +44,7 @@ import math
 import os
 from collections import Counter
 from dataclasses import dataclass, field
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from typing import Callable
 
@@ -503,6 +503,19 @@ def margin_estimate(legs: list[Leg], spot: float, defined: bool, structural: flo
     return round(MARGIN_PCT * spot * max(-up, -down, 0) + debit, 2)
 
 
+MARGIN_RETRY = timedelta(minutes=10)       # after the broker's figure refuses an entry, before it is asked again
+
+
+def margin_held(estimate: float, broker: dict | None) -> tuple[float, str]:
+    """The margin an entry is held to, and where the figure came from: the broker's own (its "final",
+    after hedge benefit) when it gave one, else the explorer's estimate. The estimate for a spread is
+    only its worst loss, far under what a broker blocks, so the broker's figure is the one that counts."""
+    final = (broker or {}).get("final")
+    if isinstance(final, (int, float)) and final > 0:
+        return float(final), "the broker's figure"
+    return float(estimate), "an estimate"
+
+
 @dataclass
 class Sized:
     legs: list[Leg]
@@ -603,6 +616,7 @@ class Explorer:
         self.journal = Journal(self.state_dir / "journal.jsonl", self.mode)
         self.ticks = Ticks(self.state_dir)
         self.kill = KillSwitch([self.state_dir / "KILL", self.state_dir.parent / "KILL"])
+        self._margin_wait: dict[str, datetime] = {}
 
     def _log(self, kind: str, at: date, /, **payload) -> dict:
         return self.journal.append(kind, asof=at.isoformat(), feed=self.feed.key, **payload)
@@ -709,8 +723,8 @@ class Explorer:
             return {}
 
     def _broker_margin(self, legs) -> dict | None:
-        """The broker's own margin figure for the structure, for the record only: the entry check above
-        still uses the estimate, so the explorer's rules do not change. A failure is recorded, never raised."""
+        """The broker's own margin figure for the structure. When the broker gives one, the entry's margin
+        check uses it (margin_held); a failure is recorded, never raised, and the estimate decides."""
         try:
             return self.feed.margin_for([{"symbol": g.symbol, "side": g.side, "qty": g.qty, "price": g.price}
                                          for g in legs])
@@ -791,10 +805,19 @@ class Explorer:
             if why:
                 self._skip(st, s, today, "quote", f"{c.symbol}: {why}", rep)
                 return
-        used = sum(e["margin_est"] for e in st.open.values())
+        used = sum(margin_held(e["margin_est"], e.get("broker_margin"))[0] for e in st.open.values())
         room = self.cfg.max_margin_frac * (self.cfg.capital + st.realised_total) - used
         if sized.margin > room:
             self._skip(st, s, today, "margin", f"needs ~Rs{sized.margin:,.0f} margin, Rs{max(room, 0):,.0f} left", rep)
+            return
+        wait = self._margin_wait.get(s.name)
+        if wait and now < wait:                          # the broker said no a few minutes ago: not asked again yet
+            return
+        broker = self._broker_margin(sized.legs)
+        need, basis = margin_held(sized.margin, broker)
+        if need > room:
+            self._margin_wait[s.name] = now + MARGIN_RETRY
+            self._skip(st, s, today, "margin", f"needs Rs{need:,.0f} margin ({basis}), Rs{max(room, 0):,.0f} left", rep)
             return
         n = st.entries[(today.isoformat(), s.name)] + 1
         entry = {
@@ -805,7 +828,7 @@ class Explorer:
             "target_rupees": sized.target, "trail": list(s.trail) if s.trail else None,
             "exit_time": s.exit_time.isoformat(timespec="minutes"), "entry_costs": sized.costs_in,
             "exit_costs_est": sized.costs_out_est, "credit": sized.credit, "margin_est": sized.margin,
-            "broker_margin": self._broker_margin(sized.legs),
+            "broker_margin": broker,
             "breakevens": breakevens(sized.legs, spot), "fee_card": self.sched.name,
         }
         self._log("XP_ENTRY", today, **entry)

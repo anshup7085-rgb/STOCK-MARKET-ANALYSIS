@@ -8,6 +8,10 @@ steady income. Paper first, then small real money, with the holder confirming ev
 `research/OPPORTUNITY_MAP.md` current and tell the holder what could help before they have to ask.
 Every rule below still binds.
 
+**The money (the holder, 10 Nov 2026):** real capital is ₹20,000. Intraday options are preferred,
+futures only if needed. Read `STATUS.md` first: it is the one page kept true, and it says what that
+capital can and cannot trade.
+
 **How we work together (agreed with the holder, 28 Oct 2026):**
 - We build this together. Tell the holder everything useful, unasked: extra options, risks, cheaper
   or faster routes, and anything they may not know to ask about. They should never have to research

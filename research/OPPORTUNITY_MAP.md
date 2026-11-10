@@ -1,4 +1,4 @@
-# Opportunity map: everything that could help (28 Oct 2026)
+# Opportunity map: everything that could help (28 Oct 2026; statuses checked 10 Nov)
 
 What exists, what it would add, what it costs, and where we stand. Kept up to date, so
 nothing useful stays unsaid. **Checked** means we confirmed it ourselves; **reported**
@@ -19,11 +19,12 @@ useful, not yet · **SKIP** not worth it.
 | NIFTY and VIX minute candles for years | Replays our intraday triggers and futures strategies | Kite historical API, inside the ₹500 a month plan; 60 days a request. **Checked** 29 Oct: full 375-candle days in 2015, 2018, 2021 and 2024. Futures: day candles back to 2015 joined across expiries; minute candles only for the live contract | NOW: `tools/index_minutes_download.py`, run by `morning` from 9 Nov (2015 on, then the current year daily); first use: the intraday momentum exploration (`research/INTRADAY_LOG.md` step 9) |
 | Minute candles of options listed now, with open interest | Our own minute-level option history, from now on | Kite, included. **Checked** 29 Oct: the 3 Nov weekly has minute data with open interest from its listing on 29 Sep; an option that expired on 27 Oct is refused | HAVE from 30 Oct: `tools/save_expiring_options.py`, started by `morning`, saves every NIFTY contract within 15% of the index expiring within 7 days, at 15:40 |
 | Minute candles of **expired** options, years back | Tests the intraday option strategies on years instead of months: the biggest speed-up for the intraday goal | **Dhan Data API** (Dhan: a SEBI-registered broker, INZ000006031 per its own pages, live since November 2021), ₹499 + GST a month. Its v2 docs (the holder's export of 27 Oct 2026, read 4 Nov): `POST /charts/rollingoption` with an `access-token` header, securityId 13 for NIFTY, expiryCode 1 = near, 2 = next, 3 = far, up to 5 years, weekly or monthly expiries, minute OHLC, volume, open interest, IV and spot, strikes chosen relative to ATM (ATM ± 10 for index options near expiry, ATM ± 3 for every other contract), `toDate` excluded, 5 data requests a second and 100,000 a day. The docs say both one day and 30 days a call. Not yet known: how complete the minutes are (`tools/dhan_check.py` measures it against our Zerodha copy). Others: ICICI Breeze (free with an ICICI Direct account; depth unclear, **reported**), Upstox Plus (expired-contract API, short minute lookback, **reported**), TrueData and Global Datafeeds (paid, prices on request), a free Zenodo set of 1-minute NIFTY options for 2017 to 2020 (unknown author) | HAVE: checked against our Zerodha copy (4 Nov: OI equal 99.7%, close inside Zerodha's minute range 97.5%, no lean) and downloaded (5 Nov: Oct 2021 to Nov 2026, 0 failed). Exploration reads only up to Oct 2024; Nov 2024 to Oct 2026 is held back for registered tests (`research/INTRADAY_LOG.md`). Turn off the plan's renewal before 4 Dec |
+| Minute candles of expired options on the **other indexes** (SENSEX, BANKNIFTY, FINNIFTY, MIDCPNIFTY) | Checks the expiry-day effect on several times as many expiry days, on indexes it was not found on; SENSEX still has a weekly expiry | The same Dhan plan, no extra cost, until it ends on 4 Dec. Its documents say the API serves NSE and BSE index options (read 10 Nov, not yet tried) | NOW: `tools/dhan_download_more.py` |
 | Tick-by-tick data and full market depth | Only for strategies faster than ours | Paid vendors | SKIP for now |
 | GIFT Nifty and global cues (US index futures, crude, dollar-rupee, US yields) | Overnight direction and gap risk | Free daily sources | LATER (cheap) |
-| Results dates of NIFTY's biggest companies | Results days move the index | Public calendars | NOW: step 3 |
-| Economic calendar: RBI policy, US Fed, inflation, budget, elections | Volatile days, for every strategy | Public calendars | NOW: step 3 |
-| News headlines, dated | Explains unusual days after the fact | News feeds | NOW: step 3 |
+| Results dates of NIFTY's biggest companies | Results days move the index | Public calendars | NEXT (promised 28 Oct, not yet built) |
+| Economic calendar: RBI policy, US Fed, inflation, budget, elections | Volatile days, for every strategy | Public calendars | NEXT (promised 28 Oct, not yet built) |
+| News headlines, dated | Explains unusual days after the fact | News feeds | LATER |
 | Social media and Telegram tips | Mostly noise and manipulation | — | SKIP |
 
 ## 2. Testing
@@ -32,7 +33,7 @@ useful, not yet · **SKIP** not worth it.
 |---|---|---|
 | Rules written down before the test, judged by the betting test | Stops us fooling ourselves | HAVE |
 | Past-data test of weekly strategies, 2019 to 2026, end of day | A first verdict in weeks, not years | DONE: V-H **failed** (31 Oct): 243 trades, 69.5% won, mean R −0.021. V never goes live. The downloaded files (1,923 sessions) stay on the server for later registered tests |
-| Intraday replay of the explorer's strategies on minute history | The same, for intraday | NEXT, after the expired-option data |
+| Intraday replay of the explorer's strategies on minute history | The same, for intraday | DONE (5–6 Nov): every strategy loses or is flat after costs, Oct 2021–Oct 2024; only the expiry-day straddle shows a small effect (`research/INTRADAY_LOG.md`) |
 | Quick idea screening on AlgoTest or Stockmock (AlgoTest: from ₹499 for 500 backtests, free weekly backtests, **reported**) | A fast filter for ideas like your cousin's; never proof | LATER, optional |
 | Paper fills against real fills | Measures how much worse real orders fill | At the small-money stage |
 
