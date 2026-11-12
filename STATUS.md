@@ -30,6 +30,13 @@ document is out of date.
 | Option minutes of expiring contracts, saved from Kite | `tools/save_expiring_options.py` | Running |
 | NIFTY and VIX minutes since 2015, from Kite | `tools/index_minutes_download.py` | Starts on the next `morning` |
 
+## The market brain (from 12 Nov 2026)
+
+A second line of work beside the F&O tests: a system that reads NSE's free daily files, forecasts the next
+session as probabilities and scores itself, and trades nothing until a score proves skill. Plan and stages:
+`research/BRAIN.md`. Stage 1 (its record on history, `run_brain.py backfill`) is built; its first run on
+real data is pending.
+
 ## What has been tested, and what it said
 
 | Tested | Result |
