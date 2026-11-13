@@ -38,12 +38,24 @@ def _num(text) -> float | None:
     return v if v == v else None
 
 
+OLD_NAMES = {"s&p cnx nifty": "nifty 50", "cnx nifty": "nifty 50", "bank nifty": "nifty bank",
+             "cnx finance": "nifty financial services", "nifty fin service": "nifty financial services"}
+
+
+def today_name(name: str) -> str:
+    """NSE renamed its indexes in November 2015 (S&P CNX Nifty, then CNX Nifty, became Nifty 50; CNX IT
+    became Nifty IT). An old name is read as today's, so one index is one series."""
+    if name in OLD_NAMES:
+        return OLD_NAMES[name]
+    return "nifty " + name[4:] if name.startswith("cnx ") else name
+
+
 def parse_index_file(raw: bytes) -> dict[str, Bar]:
     """One all-index file: lower-case index name -> Bar. Rows without a close are dropped."""
     out = {}
     for row in csv.DictReader(io.StringIO(raw.decode("utf-8-sig", errors="replace"))):
         r = {(k or "").strip().lower(): v for k, v in row.items()}
-        name = (r.get("index name") or "").strip().lower()
+        name = today_name((r.get("index name") or "").strip().lower())
         close = _num(r.get("closing index value"))
         if not name or close is None or close <= 0:
             continue

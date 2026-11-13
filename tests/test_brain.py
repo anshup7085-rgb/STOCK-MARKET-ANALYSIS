@@ -10,7 +10,7 @@ from __future__ import annotations
 import math
 import random
 import tempfile
-from datetime import date, timedelta
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 
 from brain import data, features, model
@@ -48,6 +48,10 @@ def test_index_file_is_read_by_column_name():
     assert set(got) == {"nifty 50", "india vix"}                       # a row without a close is dropped
     assert got["nifty 50"] == data.Bar(24500.5, 24600.0, 24380.05, 24522.20, 22.5)
     assert got["india vix"].close == 17.47 and got["india vix"].pe is None
+    old_file = raw.replace(b"Nifty 50", b"S&P CNX Nifty").replace(b"Nifty Bank,06-11-2026,-,-,-,-",
+                                                                  b"CNX IT,06-11-2026,1,2,1,9000")
+    assert set(data.parse_index_file(old_file)) == {"nifty 50", "india vix", "nifty it"}      # 2012's names
+    assert data.today_name("cnx nifty") == "nifty 50" and data.today_name("bank nifty") == "nifty bank"
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         (root / "a" / "index_close" / "2026").mkdir(parents=True)
@@ -141,6 +145,9 @@ def test_today_forecasts_before_the_day_and_scores_it_after():
             rc = fn(None)
         return rc, buf.getvalue()
 
+    from market.config import IST
+    clock = {"now": datetime.combine(days[-2], time(18, 0), IST)}        # the evening of the last day on disk
+    keep_now, run_brain.NOW = run_brain.NOW, lambda: clock["now"]
     keep = (data.ARCHIVE, data.DAILY, run_brain.OUT)
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -156,11 +163,17 @@ def test_today_forecasts_before_the_day_and_scores_it_after():
             assert len(first) == 2 and all(r["payload"]["after"] == days[-2].isoformat() for r in first)
             run(run_brain.cmd_today)                               # a second run the same evening adds nothing
             assert len(j.records()) == 2
+            # run again days later with no new file: the day it would be about has begun, so no forecast
+            clock["now"] = datetime.combine(days[-1], time(12, 0), IST)
+            rc, out = run(run_brain.cmd_today)
+            assert "NO FORECAST" in out and len(j.records()) == 2
+            clock["now"] = datetime.combine(days[-1], time(18, 0), IST)
             put(root, days[-1])                                    # the next session happens
             rc, out = run(run_brain.cmd_today)
             recs = j.records()
             scored = [r["payload"] for r in recs if r["type"] == "BRAIN_SCORED"]
             assert len(scored) == 2 and {s["question"] for s in scored} == {"up", "big"}
+            assert not any(s["late"] for s in scored)
             real_up = int(idx["nifty 50"][days[-1]].close > idx["nifty 50"][days[-2]].close)
             assert next(s for s in scored if s["question"] == "up")["y"] == real_up
             assert next(s for s in scored if s["question"] == "up")["p"] == next(
@@ -169,7 +182,14 @@ def test_today_forecasts_before_the_day_and_scores_it_after():
             assert verify_file(root / "brain" / "journal.jsonl").ok
             rc, out = run(run_brain.cmd_check)
             assert rc == 0 and "NIFTY 50 read from" in out and "not read from" not in out
+            # a forecast written after its day began is kept but never counted
+            j.append("BRAIN_FORECAST", asof=days[-3].isoformat(), after=days[-3].isoformat(), question="up",
+                     p=0.9, base=0.5, trained_on=1, written=clock["now"].isoformat())
+            rc, out = run(run_brain.cmd_today)
+            late = [r["payload"] for r in j.records() if r["type"] == "BRAIN_SCORED" and r["payload"]["late"]]
+            assert len(late) == 1 and "never counted" in out and "UP: 1 scored" in out
         finally:
+            run_brain.NOW = keep_now
             data.ARCHIVE, data.DAILY, run_brain.OUT = keep
     assert run_brain.may_train(date(2024, 10, 31)) and not run_brain.may_train(date(2025, 6, 2))
     assert not run_brain.may_train(date(2026, 10, 16)) and run_brain.may_train(date(2026, 11, 12))

@@ -31,10 +31,13 @@ import argparse
 import json
 import sys
 from collections import defaultdict
-from datetime import date, datetime
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 
 from brain import data, features, model
+from market.config import IST
+
+NOW = lambda: datetime.now(IST)                                 # noqa: E731 - replaced in tests
 
 REPO = Path(__file__).resolve().parent
 OUT = REPO / "state" / "brain"
@@ -121,9 +124,33 @@ def cmd_check(args) -> int:
     return 0
 
 
+def next_session_opens(day: date, cal) -> datetime:
+    d = day + timedelta(days=1)
+    while not cal.is_trading_day(d):
+        d += timedelta(days=1)
+    return datetime.combine(d, time(9, 15), IST)
+
+
+def fetch_recent(days: int = 25) -> None:
+    """NSE's two small files for the last few weeks, where they are missing. A failure is said, not raised."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("backfill_context", REPO / "tools" / "backfill_context.py")
+    bf = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(bf)
+        today = datetime.now(IST).date()
+        bf.run(today - timedelta(days=days), today, retry_missing=True)
+    except Exception as exc:                                    # noqa: BLE001
+        print(f"(could not fetch the latest NSE files: {type(exc).__name__}: {str(exc)[:80]})")
+
+
 def cmd_today(args) -> int:
     """Score what can now be scored, forecast the next session, and print the brief."""
+    from market.calendar import load_calendar
     from trading.journal import Journal
+    if getattr(args, "fetch", False):
+        fetch_recent()
+    cal, now = load_calendar(), NOW()
     indexes, fii = data.load_indexes(), data.load_fii_long_share()
     rows = features.build(indexes, fii)
     if len(rows) < model.MIN_TRAIN + 50:
@@ -133,14 +160,16 @@ def cmd_today(args) -> int:
     j = Journal(OUT / "journal.jsonl", "brain")
     recs = j.records()
     by_day = {r["day"].isoformat(): r for r in rows}
-    made = {(r["payload"]["after"], r["payload"]["question"]): r["payload"] for r in recs if r["type"] == "BRAIN_FORECAST"}
+    made = {(r["payload"]["after"], r["payload"]["question"]): {**r["payload"], "ts": r["ts"]}
+            for r in recs if r["type"] == "BRAIN_FORECAST"}
     scored = {(r["payload"]["after"], r["payload"]["question"]) for r in recs if r["type"] == "BRAIN_SCORED"}
     for key, f in sorted(made.items()):
         row = by_day.get(key[0])
         if key in scored or row is None or row["y"][key[1]] is None:
             continue
+        late = datetime.fromisoformat(f.get("written") or f["ts"]) >= next_session_opens(row["day"], cal)
         j.append("BRAIN_SCORED", asof=key[0], after=key[0], question=key[1], p=f["p"], base=f["base"],
-                 y=row["y"][key[1]])
+                 y=row["y"][key[1]], late=late)       # late: written after its day began; never counted
     last = rows[-1]
     day = last["day"].isoformat()
     print(f"=== the market brain, after the close of {day} (written {datetime.now():%d %b %H:%M}) ===")
@@ -153,19 +182,30 @@ def cmd_today(args) -> int:
           + (f"; FII long share {x['fii_long']:.0%}" if x.get("fii_long") is not None else "")
           + (f"; {x['breadth']:.0%} of sectors above their 20-day average" if x.get("breadth") is not None else ""))
     print(f"  a usual day's move lately: {last['usual_move']:.2%} either way")
-    print("\nfor the next session:")
+    stale = now >= next_session_opens(last["day"], cal)
+    if stale:
+        print(f"\nNO FORECAST: the files on disk end on {day} and the session after it has already begun. A forecast "
+              f"written now would not be a forecast. Run it again once the latest files are in (deploy/evening.sh).")
+    else:
+        print("\nfor the next session:")
     for q in features.TARGETS:
+        if stale:
+            break
         if (day, q) in made:
             f = made[(day, q)]
         else:
             train = [r for r in rows[:-1] if r["y"][q] is not None and may_train(r["day"])]
             m = model.fit(train, q)
             f = {"after": day, "question": q, "p": round(model.predict(m, last), 4), "base": round(m["base"], 4),
-                 "trained_on": m["n"]}
+                 "trained_on": m["n"], "written": now.isoformat(timespec="seconds")}
             j.append("BRAIN_FORECAST", asof=day, **f)
         what = "NIFTY closes higher" if q == "up" else f"NIFTY moves more than {last['usual_move']:.2%} either way"
         print(f"  {what}: {f['p']:.0%} (it happens on {f['base']:.0%} of days anyway)")
-    done = [r["payload"] for r in j.records() if r["type"] == "BRAIN_SCORED"]
+    every = [r["payload"] for r in j.records() if r["type"] == "BRAIN_SCORED"]
+    done = [d for d in every if not d.get("late")]
+    if len(every) > len(done):
+        print(f"\n({len(every) - len(done)} forecast(s) were written after their day had begun: kept on record, "
+              f"never counted)")
     print("\nits live score so far (forecasts written before the day they are about):")
     if not done:
         print("  nothing scored yet: the first answer comes after the next session")
@@ -185,7 +225,9 @@ def main() -> int:
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("backfill", help="its walk-forward record on the exploration years").set_defaults(fn=cmd_backfill)
     sub.add_parser("check", help="what history is on disk, by year (counts only)").set_defaults(fn=cmd_check)
-    sub.add_parser("today", help="score yesterday, forecast the next session, print the brief").set_defaults(fn=cmd_today)
+    q = sub.add_parser("today", help="score yesterday, forecast the next session, print the brief")
+    q.add_argument("--fetch", action="store_true", help="first fetch NSE's files for the last few weeks, where missing")
+    q.set_defaults(fn=cmd_today)
     args = ap.parse_args()
     return args.fn(args)
 

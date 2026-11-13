@@ -12,4 +12,4 @@ PYTHONPATH=. timeout 240 .venv/bin/python tools/record_context.py 2>/dev/null ||
 PYTHONPATH=. .venv/bin/python tools/day_report.py "$@"
 # the market brain: score yesterday's forecast, forecast the next session (trades nothing)
 echo
-PYTHONPATH=. .venv/bin/python run_brain.py today 2>&1 || echo "(the brain did not run this time)"
+PYTHONPATH=. .venv/bin/python run_brain.py today --fetch 2>&1 || echo "(the brain did not run this time)"
