@@ -118,6 +118,63 @@ def test_walk_forward_never_trains_on_the_month_it_forecasts_or_on_days_it_may_n
     assert 0.0 < p < 1.0 and 0.2 < m["base"] < 0.8
 
 
+
+def test_today_forecasts_before_the_day_and_scores_it_after():
+    import contextlib
+    import io
+
+    import run_brain
+    from trading.journal import Journal, verify_file
+    idx, days = _market(840)
+    head = "Index Name,Index Date,Open Index Value,High Index Value,Low Index Value,Closing Index Value,P/E\n"
+
+    def put(root, d):
+        n, v = idx["nifty 50"][d], idx["india vix"][d]
+        p = root / "a" / "index_close" / str(d.year) / f"ind_close_all_{d:%d%m%Y}.csv"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(head + f"Nifty 50,{d:%d-%m-%Y},{n.open},{n.high},{n.low},{n.close},22\n"
+                     f"India VIX,{d:%d-%m-%Y},-,-,-,{v.close},-\n")
+
+    def run(fn):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = fn(None)
+        return rc, buf.getvalue()
+
+    keep = (data.ARCHIVE, data.DAILY, run_brain.OUT)
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        data.ARCHIVE, data.DAILY, run_brain.OUT = root / "a", root / "d", root / "brain"
+        try:
+            for d in days[:-1]:
+                put(root, d)
+            rc, out = run(run_brain.cmd_today)
+            assert rc == 0 and f"after the close of {days[-2]}" in out and "nothing scored yet" in out, out
+            assert "NIFTY closes higher:" in out and "either way:" in out
+            j = Journal(root / "brain" / "journal.jsonl", "brain")
+            first = [r for r in j.records() if r["type"] == "BRAIN_FORECAST"]
+            assert len(first) == 2 and all(r["payload"]["after"] == days[-2].isoformat() for r in first)
+            run(run_brain.cmd_today)                               # a second run the same evening adds nothing
+            assert len(j.records()) == 2
+            put(root, days[-1])                                    # the next session happens
+            rc, out = run(run_brain.cmd_today)
+            recs = j.records()
+            scored = [r["payload"] for r in recs if r["type"] == "BRAIN_SCORED"]
+            assert len(scored) == 2 and {s["question"] for s in scored} == {"up", "big"}
+            real_up = int(idx["nifty 50"][days[-1]].close > idx["nifty 50"][days[-2]].close)
+            assert next(s for s in scored if s["question"] == "up")["y"] == real_up
+            assert next(s for s in scored if s["question"] == "up")["p"] == next(
+                r["payload"]["p"] for r in first if r["payload"]["question"] == "up")     # the forecast as written
+            assert "UP: 1 scored" in out and len([r for r in recs if r["type"] == "BRAIN_FORECAST"]) == 4
+            assert verify_file(root / "brain" / "journal.jsonl").ok
+            rc, out = run(run_brain.cmd_check)
+            assert rc == 0 and "NIFTY 50 read from" in out and "not read from" not in out
+        finally:
+            data.ARCHIVE, data.DAILY, run_brain.OUT = keep
+    assert run_brain.may_train(date(2024, 10, 31)) and not run_brain.may_train(date(2025, 6, 2))
+    assert not run_brain.may_train(date(2026, 10, 16)) and run_brain.may_train(date(2026, 11, 12))
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

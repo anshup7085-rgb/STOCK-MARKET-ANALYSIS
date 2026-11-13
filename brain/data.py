@@ -68,19 +68,19 @@ def _files(kind: str, archive: Path, daily: Path) -> dict[date, Path]:
     return dict(sorted(out.items()))
 
 
-def load_indexes(archive: Path = ARCHIVE, daily: Path = DAILY) -> dict[str, dict[date, Bar]]:
+def load_indexes(archive: Path | None = None, daily: Path | None = None) -> dict[str, dict[date, Bar]]:
     out: dict[str, dict[date, Bar]] = {}
-    for d, p in _files("index_close", archive, daily).items():
+    for d, p in _files("index_close", archive or ARCHIVE, daily or DAILY).items():
         for name, bar in parse_index_file(p.read_bytes()).items():
             out.setdefault(name, {})[d] = bar
     return out
 
 
-def load_fii_long_share(archive: Path = ARCHIVE, daily: Path = DAILY) -> dict[date, float]:
+def load_fii_long_share(archive: Path | None = None, daily: Path | None = None) -> dict[date, float]:
     """FII long contracts in index futures as a share of their long plus short."""
     from trading.fno.context import Unavailable, parse_participant_oi
     out = {}
-    for d, p in _files("participant_oi", archive, daily).items():
+    for d, p in _files("participant_oi", archive or ARCHIVE, daily or DAILY).items():
         try:
             f = parse_participant_oi(p.read_bytes(), d).get("FII", {})
         except Unavailable:

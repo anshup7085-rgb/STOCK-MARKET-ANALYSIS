@@ -3,6 +3,12 @@
 The market brain's command line. It trades nothing; it forecasts and keeps score.
 
     PYTHONPATH=. .venv/bin/python run_brain.py backfill     # its paper record on the exploration years
+    PYTHONPATH=. .venv/bin/python run_brain.py today        # score yesterday, forecast the next session
+    PYTHONPATH=. .venv/bin/python run_brain.py check        # what history is on disk (counts only)
+
+`today` writes each forecast to a hash-chained journal (state/brain/journal.jsonl) before the session
+it is about, and scores it once that session's file is on disk. It fits on every answered day except
+the held-back ones. deploy/evening.sh runs it after recording the day's files.
 
 `backfill` walks through history one month at a time: at each month's start it learns from every
 answered day before it, then forecasts that month's days, which it has never seen. Two questions a
@@ -33,6 +39,7 @@ from brain import data, features, model
 REPO = Path(__file__).resolve().parent
 OUT = REPO / "state" / "brain"
 EXPLORE_TO = date(2024, 10, 31)          # the same line as trading/fno/dhan_data.py
+HOLDOUT_TO = date(2026, 10, 18)          # held back to here; later days are the forward record
 RECORD_FROM = date(2016, 1, 1)           # nine calendar years of record: 2016 to 2024
 Z_NEEDED, YEARS_NEEDED = 2.58, 7
 
@@ -79,10 +86,106 @@ def cmd_backfill(args) -> int:
     return 0
 
 
+def may_train(d: date) -> bool:
+    """The held-back years are never fitted on before a registration (research/BRAIN.md)."""
+    return d <= EXPLORE_TO or d > HOLDOUT_TO
+
+
+def cmd_check(args) -> int:
+    """What is on disk, by year: files, and how many of them hold a NIFTY 50 close. Counts only."""
+    files = data._files("index_close", data.ARCHIVE, data.DAILY)
+    if not files:
+        print("no index files on disk")
+        return 2
+    by_year: dict[int, list] = defaultdict(list)
+    for d, path in files.items():
+        by_year[d.year].append(path)
+    first_bad = None
+    for y in sorted(by_year):
+        ok = 0
+        for path in by_year[y]:
+            if features.NIFTY in data.parse_index_file(path.read_bytes()):
+                ok += 1
+            elif first_bad is None:
+                first_bad = path
+        print(f"  {y}: {len(by_year[y])} index files, NIFTY 50 read from {ok}")
+    if first_bad is not None:
+        head = first_bad.read_bytes()[:600].decode("utf-8-sig", errors="replace").splitlines()
+        names = sorted({ln.split(",")[0].strip() for ln in head[1:6]})
+        print(f"  the first file NIFTY 50 was not read from: {first_bad.name}")
+        print(f"    its columns: {head[0][:300] if head else '(empty)'}")
+        print(f"    its first index names: {names}")
+    fii = data.load_fii_long_share()
+    if fii:
+        print(f"  FII positions: {len(fii)} days, {min(fii)} to {max(fii)}")
+    return 0
+
+
+def cmd_today(args) -> int:
+    """Score what can now be scored, forecast the next session, and print the brief."""
+    from trading.journal import Journal
+    indexes, fii = data.load_indexes(), data.load_fii_long_share()
+    rows = features.build(indexes, fii)
+    if len(rows) < model.MIN_TRAIN + 50:
+        print("too little history on disk for a forecast")
+        return 2
+    OUT.mkdir(parents=True, exist_ok=True)
+    j = Journal(OUT / "journal.jsonl", "brain")
+    recs = j.records()
+    by_day = {r["day"].isoformat(): r for r in rows}
+    made = {(r["payload"]["after"], r["payload"]["question"]): r["payload"] for r in recs if r["type"] == "BRAIN_FORECAST"}
+    scored = {(r["payload"]["after"], r["payload"]["question"]) for r in recs if r["type"] == "BRAIN_SCORED"}
+    for key, f in sorted(made.items()):
+        row = by_day.get(key[0])
+        if key in scored or row is None or row["y"][key[1]] is None:
+            continue
+        j.append("BRAIN_SCORED", asof=key[0], after=key[0], question=key[1], p=f["p"], base=f["base"],
+                 y=row["y"][key[1]])
+    last = rows[-1]
+    day = last["day"].isoformat()
+    print(f"=== the market brain, after the close of {day} (written {datetime.now():%d %b %H:%M}) ===")
+    print("It trades nothing. Forecasts are probabilities; the score below says whether they are worth anything.")
+    x = last["x"]
+    nifty = indexes[features.NIFTY][last["day"]]
+    vix = indexes.get(features.VIX, {}).get(last["day"])
+    print(f"\nthe market: NIFTY {nifty.close:,.2f} ({x['ret1']:+.2%} today, {x['ret5']:+.2%} in 5 sessions, "
+          f"{x['ret20']:+.2%} in 20)" + (f"; India VIX {vix.close:.2f}" if vix else "")
+          + (f"; FII long share {x['fii_long']:.0%}" if x.get("fii_long") is not None else "")
+          + (f"; {x['breadth']:.0%} of sectors above their 20-day average" if x.get("breadth") is not None else ""))
+    print(f"  a usual day's move lately: {last['usual_move']:.2%} either way")
+    print("\nfor the next session:")
+    for q in features.TARGETS:
+        if (day, q) in made:
+            f = made[(day, q)]
+        else:
+            train = [r for r in rows[:-1] if r["y"][q] is not None and may_train(r["day"])]
+            m = model.fit(train, q)
+            f = {"after": day, "question": q, "p": round(model.predict(m, last), 4), "base": round(m["base"], 4),
+                 "trained_on": m["n"]}
+            j.append("BRAIN_FORECAST", asof=day, **f)
+        what = "NIFTY closes higher" if q == "up" else f"NIFTY moves more than {last['usual_move']:.2%} either way"
+        print(f"  {what}: {f['p']:.0%} (it happens on {f['base']:.0%} of days anyway)")
+    done = [r["payload"] for r in j.records() if r["type"] == "BRAIN_SCORED"]
+    print("\nits live score so far (forecasts written before the day they are about):")
+    if not done:
+        print("  nothing scored yet: the first answer comes after the next session")
+    for q in features.TARGETS:
+        mine = [d for d in done if d["question"] == q]
+        if mine:
+            sc = model.score(mine) if len(mine) >= 2 else {}
+            right = sum((d["p"] > 0.5) == bool(d["y"]) for d in mine)
+            print(f"  {q.upper()}: {len(mine)} scored, right on {right}"
+                  + (f"; skill {sc['skill']:+.1%} (z {sc['z']:+.2f}); proof needs z of {Z_NEEDED} or more"
+                     if sc else ""))
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="the market brain: forecasts and keeps score; trades nothing")
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("backfill", help="its walk-forward record on the exploration years").set_defaults(fn=cmd_backfill)
+    sub.add_parser("check", help="what history is on disk, by year (counts only)").set_defaults(fn=cmd_check)
+    sub.add_parser("today", help="score yesterday, forecast the next session, print the brief").set_defaults(fn=cmd_today)
     args = ap.parse_args()
     return args.fn(args)
 

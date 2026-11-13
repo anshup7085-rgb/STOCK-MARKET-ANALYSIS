@@ -26,7 +26,7 @@ everything before the day it forecasts; and a score that grows by one honest ans
 | # | Stage | State |
 |---|---|---|
 | 1 | **A paper record on history.** Two questions about the next session: will NIFTY close UP; will its move be BIG (larger than its usual move). Walk-forward on 2016 to Oct 2024: `run_brain.py backfill`. The reading was fixed before the first run (in `run_brain.py`) | Built 12 Nov; first run pending |
-| 2 | **The daily forecast and its score, by itself.** A cron job after the close: fetch the day's files, score yesterday, forecast tomorrow, write a one-page brief. Forecasts in a hash-chained journal | Next |
+| 2 | **The daily forecast and its score.** `run_brain.py today`: score yesterday, forecast the next session, print a short brief. Forecasts go into a hash-chained journal before the day they are about. `deploy/evening.sh` runs it; running it with no one typing (cron) is still to do | Built 13 Nov, by hand for now |
 | 3 | **Read more of the market.** Every stock's daily price, volume and delivery (NSE's bhavcopy), option positions by strike, the events calendar (RBI, Budget, results) | After 2 |
 | 4 | **Does it know more than prices do?** A forecast of BIG is worth money only if it beats what option prices already imply. A test with rules bound first, on the held-back years (Nov 2024 to Oct 2026) | After the record of 1 and 2 justifies a slot |
 | 5 | **Trading.** Only on a passed test, on paper first, then at a size the account can carry | Not before 4 |
