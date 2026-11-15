@@ -47,7 +47,7 @@ real data is pending.
 | The explorer's nine strategies, replayed on Oct 2021–Oct 2024 | All lose or are flat after costs |
 | Opening-range breakout, by future and by bought option | Both fail. Fees take the future's; time decay takes the option's |
 | Selling the straddle only when options are dear | Adds nothing outside expiry day |
-| **Selling the at-the-money straddle on expiry day** | The one effect standing: positive in all six straddle variants, but small (about ₹17,000 a year a lot) and it needs far more than ₹20,000 |
+| **Selling the at-the-money straddle on expiry day** | The one effect standing, and on 15 Nov it repeated on all four other indexes tried (SENSEX, BANKNIFTY, FINNIFTY, MIDCPNIFTY), by a rule fixed before their data was read. Still exploration, not a passed test; it is a seller's trade and needs far more than ₹20,000 |
 
 Nothing has a measured edge. The correct trading output today is **NO TRADE**.
 
