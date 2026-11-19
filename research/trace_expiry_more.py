@@ -5,6 +5,7 @@ some days. This reads the saved trades of research/explore_expiry_more.py (no ma
 result) and lists, day by day, where the two differ.
 
     PYTHONPATH=. .venv/bin/python research/trace_expiry_more.py [INDEX] [ENTRY]   # default MIDCPNIFTY 09:20
+    PYTHONPATH=. .venv/bin/python research/trace_expiry_more.py MIDCPNIFTY 09:20 --day 2024-04-08   # its minutes
 
 Two explanations were written down before this was run (INTRADAY_LOG step 25):
   (a) the stop: the wider spread makes the position look worse from its first minute, so the 30% stop
@@ -42,9 +43,47 @@ def side(t: dict | None) -> str:
     return f"{t['reason']:<4} at {t['exit']}, net Rs{t['net']:+9,.0f}, {t.get('carried', 0):3d} carried"
 
 
+def minutes_around(name: str, entry: str, day: str, rows: list[dict], root: Path | None = None) -> list[str]:
+    """The index and the straddle's two legs, minute by minute, around the stops of one day: does the
+    index move when the option jumps, or does one option print alone (a bad print in thin trading)?"""
+    from datetime import date, datetime, timedelta
+
+    from research.explore_expiry import ENTRIES
+    from trading.fno import dhan_data as dd
+    r = next((r for r in rows if r["day"] == day), None)
+    if r is None:
+        return [f"{day} is not one of the saved expiry days"]
+    bars = dd.load_day(date.fromisoformat(day), root=root or REPO / "state" / "dhan" / "rolling_more" / name)
+    first = bars.get(ENTRIES[entry], {}).get((0, "CALL"))
+    if first is None:
+        return [f"no at-the-money call at {ENTRIES[entry]} on {day}"]
+    k = first.strike
+    exits = sorted(t["exit"] for t in (r["a"], r["b"]) if t)
+    t0 = datetime.strptime(exits[0], "%H:%M") - timedelta(minutes=8)
+    t1 = datetime.strptime(exits[-1], "%H:%M") + timedelta(minutes=4)
+    out = [f"{name} {day}, the straddle sold at {entry} at strike {k:g}; the stops: {', '.join(exits)}",
+           f"  {'minute':<7} {'index':>10} {'call':>9} {'put':>9} {'straddle':>9}"]
+    t = t0
+    while t <= t1:
+        hm = t.strftime("%H:%M")
+        c, q = dd.at_strike(bars, hm, k, "CALL"), dd.at_strike(bars, hm, k, "PUT")
+        spot = next((b.spot for b in (c, q) if b and b.spot), None)
+        cell = lambda b: f"{b.close:9.2f}" if b else f"{'-':>9}"          # noqa: E731
+        both = f"{c.close + q.close:9.2f}" if c and q else f"{'-':>9}"
+        out.append(f"  {hm:<7} {spot if spot else '-':>10} {cell(c)} {cell(q)} {both}")
+        t += timedelta(minutes=1)
+    return out
+
+
 def main() -> int:
-    name = sys.argv[1] if len(sys.argv) > 1 else "MIDCPNIFTY"
-    entry = sys.argv[2] if len(sys.argv) > 2 else "09:20"
+    if "--day" in sys.argv:
+        i = sys.argv.index("--day")
+        day = sys.argv[i + 1]
+        args = sys.argv[1:i] + sys.argv[i + 2:]
+    else:
+        day, args = None, sys.argv[1:]
+    name = args[0] if len(args) > 0 else "MIDCPNIFTY"
+    entry = args[1] if len(args) > 1 else "09:20"
     if not SAVED.exists():
         print("run research/explore_expiry_more.py first")
         return 2
@@ -53,6 +92,9 @@ def main() -> int:
     if not rows:
         print(f"no saved trades for {name} at {entry}")
         return 2
+    if day:
+        print("\n".join(minutes_around(name, entry, day, rows)))
+        return 0
     same = [r for r in rows if r["same_close"]]
     moved = [r for r in rows if not r["same_close"]]
     total = sum(r["diff"] for r in rows)
