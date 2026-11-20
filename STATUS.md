@@ -30,6 +30,13 @@ document is out of date.
 | Option minutes of expiring contracts, saved from Kite | `tools/save_expiring_options.py` | Running |
 | NIFTY and VIX minutes since 2015, from Kite | `tools/index_minutes_download.py` | Starts on the next `morning` |
 
+## The plan from 20 Nov 2026: Market Lab
+
+Agreed with the holder: several markets (India and crypto first, then the US and others), many strategies on
+paper, a news lab, the holder's own daily view scored beside the machine's, and one private dashboard.
+The plan: `research/BLUEPRINT.md`. Built so far: the dashboard's first version (`dashboard/build.py`,
+served by `deploy/dashboard.sh` on the holder's private Tailscale network only).
+
 ## The market brain (from 12 Nov 2026)
 
 A second line of work beside the F&O tests: a system that reads NSE's free daily files, forecasts the next

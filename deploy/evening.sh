@@ -13,3 +13,5 @@ PYTHONPATH=. .venv/bin/python tools/day_report.py "$@"
 # the market brain: score yesterday's forecast, forecast the next session (trades nothing)
 echo
 PYTHONPATH=. .venv/bin/python run_brain.py today --fetch 2>&1 || echo "(the brain did not run this time)"
+# the dashboard: rebuilt from today's records, and served privately if Tailscale is set up
+deploy/dashboard.sh 2>&1 | tail -1
