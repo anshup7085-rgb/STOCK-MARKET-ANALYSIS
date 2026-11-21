@@ -102,9 +102,9 @@ def test_walk_forward_never_trains_on_the_month_it_forecasts_or_on_days_it_may_n
     seen = []
     real_fit = model.fit
 
-    def spy(train, target):
+    def spy(train, target, names=features.FEATURES):
         seen.append((train[-1]["day"], len(train)))
-        return real_fit(train, target)
+        return real_fit(train, target, names)
 
     model.fit = spy
     try:

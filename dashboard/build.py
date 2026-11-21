@@ -97,6 +97,53 @@ def brain(root: Path) -> list[str]:
     return out
 
 
+def crypto(root: Path) -> list[str]:
+    from crypto import store
+    kroot, live = root / "state" / "crypto" / "klines", root / "state" / "crypto" / "live"
+    rows = []
+    for sym in ("BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT"):
+        years = sorted((kroot / sym / "1d").glob("*.csv.gz"))
+        if not years:
+            continue
+        daily = store._read(years[-1])
+        if not daily:
+            continue
+        last_close = daily[max(daily)].close
+        now, when = last_close, "day close"
+        files = sorted((live / sym).glob("*.csv"))
+        if files:
+            tail = files[-1].read_text().strip().splitlines()
+            if len(tail) > 1:
+                parts = tail[-1].split(",")
+                now = float(parts[4])
+                when = datetime.fromtimestamp(int(parts[0]) / 1000 + 60).strftime("%H:%M")
+        ch = now / last_close - 1
+        cls = "up" if ch > 0 else "down" if ch < 0 else ""
+        rows.append(f"<tr><td>{sym[:-4]}</td><td class=num>${now:,.2f}</td><td class='num {cls}'>{ch:+.2%}</td>"
+                    f"<td class=muted>{esc(when)}</td></tr>")
+    if not rows:
+        return ["<p class=muted>Not started: <code>deploy/crypto.sh</code> starts the crypto head.</p>"]
+    out = ["<table><tr><th>Coin</th><th>Price</th><th>Since 05:30</th><th>As of</th></tr>" + "".join(rows) + "</table>"]
+    recs = records(root / "state" / "crypto" / "brain" / "journal.jsonl", "crypto-brain")
+    fc = [r["payload"] for r in recs if r["type"] == "CRYPTO_FORECAST"]
+    if fc:
+        last = max(f["after"] for f in fc)
+        now_f = {f["question"]: f for f in fc if f["after"] == last}
+        sc = [r["payload"] for r in recs if r["type"] == "CRYPTO_SCORED" and not r["payload"].get("late")]
+        words = {"up": "BTC closes higher", "big": "A bigger move than usual"}
+        out.append(f"<p class=muted>The crypto brain, for the UTC day after {esc(last)}</p><table><tr><th>Question</th>"
+                   "<th>Brain</th><th>Usually</th></tr>" + "".join(
+                       f"<tr><td>{words.get(q, q)}</td><td class=num><b>{f['p']:.0%}</b></td>"
+                       f"<td class=num>{f['base']:.0%}</td></tr>"
+                       for q, f in sorted(now_f.items(), key=lambda kv: kv[0] != "up")) + "</table>")
+        for q in ("up", "big"):
+            mine = [d for d in sc if d["question"] == q]
+            if mine:
+                right = sum((d["p"] > 0.5) == bool(d["y"]) for d in mine)
+                out.append(f"<p class=muted>Live score {q.upper()}: {right} right of {len(mine)}</p>")
+    return out
+
+
 def book(path: Path, title_capital: float | None = None) -> tuple[float, float, int, float]:
     recs = records(path, "fno-explore")
     init = next((r for r in recs if r["type"] == "XP_INIT"), None)
@@ -180,7 +227,8 @@ th{color:var(--muted);font-weight:500}.num{text-align:right;font-variant-numeric
 
 
 def build(root: Path = ROOT) -> str:
-    sections = [("The market", market), ("The brain: tomorrow, and its score", brain), ("Paper books", books),
+    sections = [("The market", market), ("The brain: tomorrow, and its score", brain), ("Crypto", crypto),
+                ("Paper books", books),
                 ("Latest research findings", findings), ("Data health", health)]
     body = []
     for title, fn in sections:

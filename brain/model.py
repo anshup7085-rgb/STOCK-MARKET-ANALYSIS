@@ -20,8 +20,8 @@ MIN_TRAIN = 500
 RIDGE = 1.0
 
 
-def _matrix(rows: list[dict], mean=None, std=None):
-    raw = np.array([[np.nan if r["x"].get(f) is None else r["x"][f] for f in FEATURES] for r in rows], dtype=float)
+def _matrix(rows: list[dict], mean=None, std=None, names=FEATURES):
+    raw = np.array([[np.nan if r["x"].get(f) is None else r["x"][f] for f in names] for r in rows], dtype=float)
     if mean is None:
         have = ~np.isnan(raw)
         n = np.maximum(have.sum(axis=0), 1)
@@ -33,9 +33,9 @@ def _matrix(rows: list[dict], mean=None, std=None):
     return np.hstack([np.ones((len(rows), 1)), z]), mean, std
 
 
-def fit(rows: list[dict], target: str) -> dict:
+def fit(rows: list[dict], target: str, names=FEATURES) -> dict:
     """Ridge logistic regression by Newton's method. Returns the weights and the scaling."""
-    X, mean, std = _matrix(rows)
+    X, mean, std = _matrix(rows, names=names)
     y = np.array([r["y"][target] for r in rows], dtype=float)
     w = np.zeros(X.shape[1])
     pen = np.eye(X.shape[1]) * RIDGE
@@ -46,16 +46,16 @@ def fit(rows: list[dict], target: str) -> dict:
         w += step
         if np.abs(step).max() < 1e-8:
             break
-    return {"w": w, "mean": mean, "std": std, "base": float(y.mean()), "n": len(rows)}
+    return {"w": w, "mean": mean, "std": std, "base": float(y.mean()), "n": len(rows), "names": tuple(names)}
 
 
 def predict(m: dict, row: dict) -> float:
-    X, _, _ = _matrix([row], m["mean"], m["std"])
+    X, _, _ = _matrix([row], m["mean"], m["std"], m.get("names", FEATURES))
     return float(1 / (1 + math.exp(-max(-30.0, min(30.0, float(X[0] @ m["w"]))))))
 
 
 def walk_forward(rows: list[dict], target: str, first: date | None = None, last: date | None = None,
-                 may_train=lambda d: True) -> list[dict]:
+                 may_train=lambda d: True, names=FEATURES) -> list[dict]:
     """A forecast for every row from `first` to `last` whose answer is known, each from a model fitted
     at the start of its month on the answered rows before that month that `may_train` allows."""
     out, model, month = [], None, None
@@ -67,7 +67,7 @@ def walk_forward(rows: list[dict], target: str, first: date | None = None, last:
             month = (d.year, d.month)
             start = date(d.year, d.month, 1)
             train = [t for t in rows[:i] if t["day"] < start and t["y"][target] is not None and may_train(t["day"])]
-            model = fit(train, target) if len(train) >= MIN_TRAIN else None
+            model = fit(train, target, names) if len(train) >= MIN_TRAIN else None
         if model is None:
             continue
         out.append({"day": d.isoformat(), "p": round(predict(model, r), 4), "base": round(model["base"], 4),
