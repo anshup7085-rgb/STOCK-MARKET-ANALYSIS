@@ -109,6 +109,15 @@ TEMPLATES: dict[str, dict] = {
         "trigger": {"type": "at"}, "window": ["09:20", "09:25"],
         "exit": {"stop": {"credit_mult": 0.3}},
     },
+    "expiry_straddle": {
+        "about": "Sell the at-the-money straddle at 13:00 on its expiry day only, and hold to the square-off "
+                 "unless the loss reaches 30% of the credit: the one effect the explorations found (research/"
+                 "INTRADAY_LOG.md steps 8, 25, 33), followed forward on paper. Undefined risk: the stop is the risk, "
+                 "and a fast fall can overrun it many times (step 28).",
+        "legs": "CE-@ATM PE-@ATM",
+        "trigger": {"type": "at"}, "window": ["13:00", "13:05"], "only_expiry_day": True,
+        "exit": {"stop": {"credit_mult": 0.3}},
+    },
     "short_strangle": {
         "about": "Sell a call and a put about half a straddle away from the index. Undefined risk.",
         "legs": "CE-@EM+0.5 PE-@EM-0.5",

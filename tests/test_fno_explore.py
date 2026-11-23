@@ -580,6 +580,26 @@ def test_the_small_book_buys_only_and_fits_the_real_capital():
     assert leg["price"] * LOT <= 0.8 * 20_000 and e["risk"] <= 4500
 
 
+def test_the_expiry_straddle_trades_only_on_its_expiry_day():
+    strat = {"name": "exp", "template": "expiry_straddle", "risk_budget": 50_000, "max_units": 1}
+    ce, pe = f"N{WK:%m%d}25000CE", f"N{WK:%m%d}25000PE"
+    for day, trades in ((DAY, False), (WK, True)):               # a Wednesday with a week left; then expiry day
+        clock = Clock(datetime.combine(day, time(13, 0), IST))
+        feed = Scripted(clock)
+        feed.prices = {ce: (40.0, 40.5), pe: (38.0, 38.5)}
+        ex = Explorer(feed, tmpdir() / "x_mock", _cfg([strat]), calendar=CAL, now_fn=clock)
+        ex.init()
+        rep = at(ex, clock, 13, 0, d=day)
+        if trades:
+            e = next(iter(ex.state().open.values()))
+            assert [(g["side"], g["symbol"]) for g in e["legs"]] == [("SELL", ce), ("SELL", pe)]
+            assert e["stop_rupees"] == round(0.3 * (40.0 + 38.0) * LOT, 2)
+        else:
+            assert not ex.state().open and any("only on its options' expiry day" in s for s in rep.skips), rep.skips
+    cfg = load_config(Path(__file__).resolve().parents[1] / "config" / "fno_strategies.example.json")
+    assert any(s.name == "expiry_straddle" and s.only_expiry_day for s in cfg.strategies)
+
+
 def test_a_changed_configuration_starts_a_new_generation_and_the_screen_restarts():
     ex, clock, feed = scripted()
     at(ex, clock, 9, 20)

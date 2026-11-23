@@ -15,6 +15,7 @@
     {"name": "debit_spread", "template": "debit_spread", "risk_budget": 4000, "max_units": 2},
     {"name": "credit_spread", "template": "credit_spread", "risk_budget": 5000, "max_units": 2},
     {"name": "short_straddle", "template": "short_straddle", "risk_budget": 9000, "max_units": 1},
+    {"name": "expiry_straddle", "template": "expiry_straddle", "risk_budget": 6000, "max_units": 1},
     {"name": "iron_fly", "template": "iron_fly", "risk_budget": 7000, "max_units": 1},
     {"name": "iron_condor", "template": "iron_condor", "risk_budget": 6000, "max_units": 1},
     {"name": "long_straddle", "template": "long_straddle", "risk_budget": 18000, "max_units": 1, "enabled": false}

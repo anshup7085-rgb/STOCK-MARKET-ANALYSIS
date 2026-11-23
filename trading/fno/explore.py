@@ -144,6 +144,7 @@ class Strategy:
     max_entries: int
     skip_expiry_day: bool
     about: str = ""
+    only_expiry_day: bool = False
 
     def legs_for(self, direction: str) -> tuple[LegSpec, ...] | None:
         return self.legs.get(direction) or self.legs.get("any")
@@ -192,6 +193,7 @@ def _strategy(d: dict, square_off: time) -> Strategy:
         target=target, stop=stop, trail=trail, risk_budget=float(base.get("risk_budget", 2500.0)),
         max_units=int(base.get("max_units", 5)), max_entries=int(base.get("max_entries", 1)),
         skip_expiry_day=bool(base.get("skip_expiry_day", False)), about=base.get("about", ""),
+        only_expiry_day=bool(base.get("only_expiry_day", False)),
     )
     if not (OPEN <= s.start <= s.end < s.exit_time):
         raise ValueError(f"{name}: the window must open after 09:15 and close before the exit time")
@@ -790,6 +792,9 @@ class Explorer:
                 quotes.update(self._quotes(missing, [], rep))
         if s.skip_expiry_day and any(c.right != "FUT" and c.expiry == today for _, c in pairs):
             self._skip(st, s, today, "expiry_day", "its options expire today", rep)
+            return
+        if s.only_expiry_day and not all(c.expiry == today for _, c in pairs if c.right != "FUT"):
+            self._skip(st, s, today, "not_expiry_day", "it trades only on its options' expiry day", rep)
             return
         for sp, c in pairs:                              # priced only from two-sided, tight, fresh quotes
             why = quote_problem(quotes.get(c.symbol), now, sp.side, 0, sp.kind == "FUT", self.cfg)
