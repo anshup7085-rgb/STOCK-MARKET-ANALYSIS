@@ -84,11 +84,11 @@ def test_the_small_book_section():
              broker_margin=None, legs=[{"side": "BUY", "lots": 1, "qty": 65, "symbol": "N1124500PE", "price": 56.0}])
     _exit(j, day, "15:15", "late_momentum-2026-11-12-1", 900.0)
     out = run()
-    assert "--- the small book: Rs20,000" in out
+    assert "--- the option-buying book" in out
     assert "14:31 BUY   late_momentum (short): +1xN1124500PE@56; paid Rs3,640" in out, out
     assert "today: 1 trade(s), net Rs+900 (+4.5% of Rs20,000)" in out, out
     assert "since 2026-11-11: 2 trade(s), net Rs-750; the Rs20,000 would now be Rs19,250" in out, out
-    assert "small book: verifies" in out
+    assert "option-buying book: verifies" in out
 
 
 if __name__ == "__main__":

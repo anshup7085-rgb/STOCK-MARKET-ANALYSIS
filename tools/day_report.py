@@ -147,10 +147,10 @@ def whatif(day: str) -> list[str]:
 
 
 def small(day: str) -> list[str]:
-    """The small book: the holder's real capital, one bought option at a time. Paper."""
+    """The option-buying book: one bought option at a time. Paper."""
     path = SMALL / "journal.jsonl"
     if not path.exists():
-        return ["no small book yet (it starts with the next `morning`)"]
+        return ["not running (off by default: `fno explore run --small` turns it on)"]
     recs = Journal(path, "fno-explore").records()
     today = [r for r in recs if r.get("asof") == day]
     out = []
@@ -227,7 +227,7 @@ def main() -> int:
     print("\n".join(explorer(day)))
     print("\n--- what-if (every signal, 1 lot, no budget or position limits; not the test) ---")
     print("\n".join(whatif(day)))
-    print("\n--- the small book: Rs20,000, bought options only (paper; the size of the real account) ---")
+    print("\n--- the option-buying book (paper; bought options only) ---")
     print("\n".join(small(day)))
     print("\n--- market context (recorded for later tests; not used to trade) ---")
     print("\n".join(summary(read_day(REPO, day))))
@@ -249,7 +249,7 @@ def main() -> int:
         print("\n--- Kite historical data check (one time; counts and dates only) ---")
         print(check.read_text(errors="replace").strip()[:4000])
     print("\n--- journals ---")
-    for name, d in (("explorer", EXPLORE), ("what-if", WHATIF), ("small book", SMALL), ("V", V)):
+    for name, d in (("explorer", EXPLORE), ("what-if", WHATIF), ("option-buying book", SMALL), ("V", V)):
         p = d / "journal.jsonl"
         if p.exists():
             vr = verify_file(p)

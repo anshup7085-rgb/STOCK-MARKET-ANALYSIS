@@ -8,9 +8,10 @@ steady income. Paper first, then small real money, with the holder confirming ev
 `research/OPPORTUNITY_MAP.md` current and tell the holder what could help before they have to ask.
 Every rule below still binds.
 
-**The money (the holder, 10 Nov 2026):** real capital is ₹20,000. Intraday options are preferred,
-futures only if needed. Read `STATUS.md` first: it is the one page kept true, and it says what that
-capital can and cannot trade.
+**The money (the holder, 26 Nov 2026):** capital will be arranged in future, once a strategy has
+passed its test; research is not limited by account size (the earlier ₹20,000 limit is lifted). The
+holder expects to qualify as a Chartered Accountant by the end of 2027. Read `STATUS.md` first: it is
+the one page kept true.
 
 **How we work together (agreed with the holder, 28 Oct 2026):**
 - We build this together. Tell the holder everything useful, unasked: extra options, risks, cheaper

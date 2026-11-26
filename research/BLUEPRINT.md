@@ -62,5 +62,5 @@ on the server's **Tailscale** address: a free private network between the holder
 
 ## What it will not do
 
-It will not turn ₹20,000 into ₹2,000 a day: no system can make 10% a day. It finds edges faster and
-more honestly than one person can, and keeps them ready for when the capital has grown.
+No system makes 10% a day; income will be capital times a proven edge. It finds edges faster and more
+honestly than one person can, and keeps them ready for when the capital is arranged.

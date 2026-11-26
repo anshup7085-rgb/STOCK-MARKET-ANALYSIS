@@ -502,13 +502,12 @@ eval "$(.venv/bin/python tools/kite_session.py --eval)"   # today's login, by ha
 deploy/fno_day.sh        # both runners in tmux, logging to logs/
 ```
 
-**The small book.** Beside the explorer and the what-if book, the runner keeps a third paper
-book the size of the holder's real capital: ₹20,000, in `state/fno_small`, from
-`config/fno_small.example.json` (copy it to `config/fno_small.json` to change it). That capital
-cannot sell an option or hold a future, so its strategies only buy one option lot: a cheap
+**The option-buying book.** A third paper book, off by default: `fno explore run --small` runs it
+beside the explorer, in `state/fno_small`, from `config/fno_small.example.json` (copy it to
+`config/fno_small.json` to change it). Its strategies only buy one option lot: a cheap
 out-of-the-money option on the opening-range breakout, the same on a 0.5% move by 14:30, and
-the at-the-money option with a tight stop. It stops for the day after a ₹2,000 loss. The
-evening report shows it in its own section. `fno explore run --no-small` turns it off.
+the at-the-money option with a tight stop. Its replay on 2021–2024 lost (`research/INTRADAY_LOG.md`
+step 21). The evening report shows it in its own section when it has run.
 
 **What to expect.**
 

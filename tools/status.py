@@ -46,7 +46,7 @@ def lines() -> list[str]:
                f" expiry straddle {len(exp)} trade(s), net Rs{sum(r['payload']['net'] for r in exp):+,.0f}")
     sm = journal("fno_small", "fno-explore")
     sx = [r for r in sm if r["type"] == "XP_EXIT"]
-    out.append(f"Rs20,000 book: last active {last_asof(sm)}; {len(sx)} trades, net Rs{sum(r['payload']['net'] for r in sx):+,.0f}")
+    out.append(f"option-buying book: last active {last_asof(sm)}; {len(sx)} trades, net Rs{sum(r['payload']['net'] for r in sx):+,.0f}")
     out.append(f"Kite runners now: {'running' if running('fno explore run') else 'not running'}")
     mins = sorted(p.name[:4] for p in (ROOT / "state" / "index_minutes" / "NIFTY_50").glob("*.csv.gz"))
     out.append(f"NIFTY minutes on disk: {mins[0] + ' to ' + mins[-1] if mins else 'none yet (needs one `morning`)'}")

@@ -165,7 +165,7 @@ def _whatif(ex: Explorer) -> Explorer | None:
 
 
 def _small(ex: Explorer) -> Explorer | None:
-    """The small book (the holder's real capital, bought options only) on the explorer's own feed, or
+    """The option-buying book (bought options only) on the explorer's own feed, or
     None if it cannot start: it must never stop the explorer."""
     try:
         sm = Explorer(ex.feed, small_dir(), load_config(small_config_path()))
@@ -185,7 +185,7 @@ def cmd_run(args) -> int:
     print(f"explorer running: one pass every {args.every}s until {until:%H:%M}. Ctrl-C stops it; "
           f"open positions are then closed at the next run's first pass or booked at their last mark."
           + (" A what-if book (every signal, 1 unit, no limits) runs alongside." if wi else "")
-          + (f" The small book (Rs{sm.cfg.capital:,.0f}, bought options) runs alongside." if sm else ""))
+          + (f" The option-buying book (Rs{sm.cfg.capital:,.0f}) runs alongside." if sm else ""))
     while datetime.now(IST).time() < until:
         try:
             rep = ex.run_pass()
@@ -288,8 +288,8 @@ def add_explore(fs) -> None:
     q.add_argument("--until", default="15:30")
     q.add_argument("--no-whatif", dest="whatif", action="store_false",
                    help="do not run the what-if book (every signal at 1 unit, no limits) alongside")
-    q.add_argument("--no-small", dest="small", action="store_false",
-                   help="do not run the small book (the holder's real capital, bought options) alongside")
+    q.add_argument("--small", dest="small", action="store_true",
+                   help="also run the option-buying book (bought options only) alongside")
     q.set_defaults(fn=cmd_run)
     q = xs.add_parser("status"); q.set_defaults(fn=cmd_status)
     q = xs.add_parser("report"); q.add_argument("--json", dest="json_out", default=None)

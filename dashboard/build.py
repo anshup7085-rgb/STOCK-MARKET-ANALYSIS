@@ -6,7 +6,7 @@ on the server. It changes nothing and holds no secret; it only reads.
     PYTHONPATH=. .venv/bin/python dashboard/build.py        # writes state/dashboard/index.html
     deploy/dashboard.sh                                       # serves it, privately, on the Tailscale network
 
-Sections: the market today; the brain's forecast and its live score; the Rs20,000 book; the explorer, the
+Sections: the market today; the brain's forecast and its live score; the paper books: the explorer, the
 what-if book and V; the latest research findings; the health of the data. A section whose record does not
 exist yet says so. research/BLUEPRINT.md says what will be added (crypto, news, the human desk).
 """
@@ -156,7 +156,7 @@ def book(path: Path, title_capital: float | None = None) -> tuple[float, float, 
 
 def books(root: Path) -> list[str]:
     rows = []
-    for label, sub in (("₹20,000 book (bought options)", "fno_small"), ("Explorer (₹5 lakh)", "fno_explore"),
+    for label, sub in (("Option-buying book", "fno_small"), ("Explorer (₹5 lakh)", "fno_explore"),
                        ("What-if (every signal)", "fno_whatif")):
         p = root / "state" / sub / "journal.jsonl"
         if not p.exists():

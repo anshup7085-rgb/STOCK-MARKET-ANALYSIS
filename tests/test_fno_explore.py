@@ -557,10 +557,10 @@ def test_the_brokers_margin_figure_decides_when_there_is_one():
     assert margin_held(3250.0, {"initial": 1.0, "final": 35000}) == (35000.0, "the broker's figure")
 
 
-def test_the_small_book_buys_only_and_fits_the_real_capital():
+def test_the_option_buying_book_buys_only_one_lot():
     from trading.fno.explore_cli import small_config_path, small_dir
     cfg = load_config(small_config_path())
-    assert cfg.capital == 20_000 and cfg.daily_loss_limit == 2_000 and cfg.max_open == 2
+    assert cfg.capital == 500_000 and cfg.daily_loss_limit == 15_000 and cfg.max_open == 2
     assert small_dir().name == "fno_small"
     for s in cfg.strategies:                                   # every leg is bought: nothing here needs margin
         assert all(sp.side == "BUY" and sp.kind in ("CE", "PE") for specs in s.legs.values() for sp in specs), s.name

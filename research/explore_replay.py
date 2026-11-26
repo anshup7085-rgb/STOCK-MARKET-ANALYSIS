@@ -246,7 +246,7 @@ def main() -> int:
     ap.add_argument("--strategies", default="", help="only these, comma-separated; a library template not in "
                     "the configuration joins at a Rs6,000 risk budget and one unit (e.g. long_option)")
     ap.add_argument("--config", default="", help="replay this configuration instead of the explorer's "
-                    "(e.g. config/fno_small.example.json, the Rs20,000 book); the result goes to replay-<file>.json")
+                    "(e.g. config/fno_small.example.json, the option-buying book); the result goes to replay-<file>.json")
     args = ap.parse_args()
     raw = json.loads(Path(args.config or DEFAULT_CONFIG).read_text())
     out = OUT.with_name(f"replay-{Path(args.config).name.split('.')[0]}.json") if args.config else OUT

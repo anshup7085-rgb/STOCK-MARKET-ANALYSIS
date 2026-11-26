@@ -49,7 +49,7 @@ def test_a_working_server_shows_the_market_the_brain_the_books_and_the_findings(
     assert "25,250.00" in page and "+1.00%" in page and "Close of Thursday 19 Nov 2026" in page
     assert "<b>56%</b>" in page and "<b>37%</b>" in page and "For the session after 2026-11-19" in page
     assert "<td>UP</td><td class=num>1</td><td class=num>1</td>" in page          # the late one is not counted
-    assert "₹20,000 book" in page and "−₹750" in page and "₹19,250" in page
+    assert "Option-buying book" in page and "−₹750" in page and "₹19,250" in page
     assert page.index("NIFTY closes higher") < page.index("A bigger move")
     assert "New finding &amp; more" in page and "Old &lt;step&gt;" in page          # escaped
     assert page.index("New finding") < page.index("Old &lt;")                       # newest first
