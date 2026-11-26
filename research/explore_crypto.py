@@ -3,6 +3,7 @@ EXPLORATION, NOT EVIDENCE: the simple crypto rules of crypto/strategies.py on BT
 exploration years only (to 31 Oct 2024), AFTER India's crypto tax.
 
     PYTHONPATH=. .venv/bin/python research/explore_crypto.py
+    PYTHONPATH=. .venv/bin/python research/explore_crypto.py --tax 0     # what-if: a country with no tax on crypto
 
 Fixed on 26 Nov 2026, before any rule was run on any price:
   money     a paper account of Rs20,000 per rule and coin, all in or all out, from 1 Jun 2018 (the rules
@@ -86,6 +87,11 @@ def label(r: dict, hold: dict) -> str:
 
 
 def main() -> int:
+    global TAX, OUT
+    if "--tax" in sys.argv:                                     # e.g. --tax 0: the same rules where crypto is untaxed
+        TAX = float(sys.argv[sys.argv.index("--tax") + 1])
+        OUT = OUT.with_name(f"explore_rules_tax{TAX:g}.json")
+        print(f"(a what-if: the tax on each gain is {TAX:.1%} instead of India's 31.2%)")
     results: dict[str, dict] = {}
     labels: dict[str, dict[str, str]] = defaultdict(dict)
     for sym in ("BTCUSDT", "ETHUSDT"):
@@ -95,7 +101,7 @@ def main() -> int:
             return 2
         days, closes = [store.utc_day(c) for c in candles], [c.close for c in candles]
         hold = run(days, closes, "hold")
-        print(f"\n{sym[:-4]}, {START} to {END}, Rs{CAPITAL:,.0f} each, after a 0.25% cost a side and 31.2% tax on each gain:")
+        print(f"\n{sym[:-4]}, {START} to {END}, Rs{CAPITAL:,.0f} each, after a 0.25% cost a side and {TAX:.1%} tax on each gain:")
         for rule in RULES:
             r = hold if rule == "hold" else run(days, closes, rule)
             results[f"{sym} {rule}"] = r
