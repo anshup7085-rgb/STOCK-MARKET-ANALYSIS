@@ -152,13 +152,16 @@ def crypto_paper(root: Path) -> list[str]:
     body = "".join(
         f"<tr><td>{esc(r['rule'])} {esc(r['coin'])}</td><td>{'holding' if r['in'] else 'cash'}</td>"
         f"<td class='num {'up' if r['free'] > paper.CAPITAL else 'down' if r['free'] < paper.CAPITAL else ''}'>₹{r['free']:,.0f}</td>"
-        f"<td class='num {'up' if r['india'] > paper.CAPITAL else 'down' if r['india'] < paper.CAPITAL else ''}'>₹{r['india']:,.0f}</td></tr>"
+        f"<td class='num {'up' if r['india'] > paper.CAPITAL else 'down' if r['india'] < paper.CAPITAL else ''}'>₹{r['india']:,.0f}</td>"
+        + (f"<td class='num {'up' if r['spec'] > paper.CAPITAL else 'down' if r['spec'] < paper.CAPITAL else ''}'>₹{r['spec']:,.0f}</td>"
+           if r.get("spec") is not None else "<td class=muted>–</td>") + "</tr>"
         for r in sorted(rows, key=lambda r: (r["coin"], r["rule"] != "hold", r["rule"])))
     return [f"<p class=muted>Each account began with ₹{paper.CAPITAL:,.0f} on {esc(rows[0]['since'])}; last day "
             f"{esc(rows[0]['day'])} ({rows[0]['days']} days). Paper only.</p>",
-            "<table><tr><th>Rule</th><th>Now</th><th>No tax</th><th>After India's tax</th></tr>" + body + "</table>",
+            "<table><tr><th>Rule</th><th>Now</th><th>No tax</th><th>VDA tax</th><th>As business</th></tr>" + body + "</table>",
             "<p class=muted>“hold” is the benchmark. ma50 and mom30 beat it on both coins with no tax in 2018–2024; "
-            "under India's tax they did not (research log steps 37 and 40).</p>"]
+            "under India's VDA tax they did not (research log steps 37 and 40). “As business” is the unsettled reading "
+            "that crypto futures are speculative business income, at slab rates (step 42).</p>"]
 
 
 def book(path: Path, title_capital: float | None = None) -> tuple[float, float, int, float]:

@@ -72,7 +72,8 @@ def lines() -> list[str]:
     rows = paper.summary(ROOT / "state" / "crypto" / "paper")
     if rows:
         out.append(f"crypto paper book ({rows[0]['days']} days to {rows[0]['day']}): " + "; ".join(
-            f"{r['rule']} {r['coin']} Rs{r['free']:,.0f}/Rs{r['india']:,.0f}" for r in rows) + " (no tax / India)")
+            f"{r['rule']} {r['coin']} Rs{r['free']:,.0f}/Rs{r['india']:,.0f}/Rs{(r.get('spec') or 0):,.0f}" for r in rows)
+            + " (no tax / VDA / as business)")
     else:
         out.append("crypto paper book: not started")
     out.append(f"dashboard: {'serving' if running('http.server 8080') else 'not serving'}")

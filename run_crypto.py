@@ -196,8 +196,9 @@ def cmd_paper(args=None) -> int:
     for line in paper.run(NOW()):
         print(line)
     for r in paper.summary():
+        spec = f", Rs{r['spec']:,.0f} as speculative business" if r.get("spec") is not None else ""
         print(f"  {r['rule']:<6} {r['coin']}: {'holding' if r['in'] else 'in cash'}; worth Rs{r['free']:,.0f} with no tax, "
-              f"Rs{r['india']:,.0f} after India's tax (from Rs{paper.CAPITAL:,.0f} on {r['since']})")
+              f"Rs{r['india']:,.0f} after the VDA tax{spec} (from Rs{paper.CAPITAL:,.0f} on {r['since']})")
     return 0
 
 
