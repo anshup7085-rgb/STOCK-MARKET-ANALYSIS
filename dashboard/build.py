@@ -144,6 +144,23 @@ def crypto(root: Path) -> list[str]:
     return out
 
 
+def crypto_paper(root: Path) -> list[str]:
+    from crypto import paper
+    rows = paper.summary(root / "state" / "crypto" / "paper")
+    if not rows:
+        return ["<p class=muted>Not started yet: it begins by itself at the next 05:36 IST run.</p>"]
+    body = "".join(
+        f"<tr><td>{esc(r['rule'])} {esc(r['coin'])}</td><td>{'holding' if r['in'] else 'cash'}</td>"
+        f"<td class='num {'up' if r['free'] > paper.CAPITAL else 'down' if r['free'] < paper.CAPITAL else ''}'>₹{r['free']:,.0f}</td>"
+        f"<td class='num {'up' if r['india'] > paper.CAPITAL else 'down' if r['india'] < paper.CAPITAL else ''}'>₹{r['india']:,.0f}</td></tr>"
+        for r in sorted(rows, key=lambda r: (r["coin"], r["rule"] != "hold", r["rule"])))
+    return [f"<p class=muted>Each account began with ₹{paper.CAPITAL:,.0f} on {esc(rows[0]['since'])}; last day "
+            f"{esc(rows[0]['day'])} ({rows[0]['days']} days). Paper only.</p>",
+            "<table><tr><th>Rule</th><th>Now</th><th>No tax</th><th>After India's tax</th></tr>" + body + "</table>",
+            "<p class=muted>“hold” is the benchmark. ma50 and mom30 beat it on both coins with no tax in 2018–2024; "
+            "under India's tax they did not (research log steps 37 and 40).</p>"]
+
+
 def book(path: Path, title_capital: float | None = None) -> tuple[float, float, int, float]:
     recs = records(path, "fno-explore")
     init = next((r for r in recs if r["type"] == "XP_INIT"), None)
@@ -228,6 +245,7 @@ th{color:var(--muted);font-weight:500}.num{text-align:right;font-variant-numeric
 
 def build(root: Path = ROOT) -> str:
     sections = [("The market", market), ("The brain: tomorrow, and its score", brain), ("Crypto", crypto),
+                ("Crypto paper book", crypto_paper),
                 ("Paper books", books),
                 ("Latest research findings", findings), ("Data health", health)]
     body = []

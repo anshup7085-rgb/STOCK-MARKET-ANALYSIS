@@ -68,6 +68,13 @@ def lines() -> list[str]:
             t = int(tail[-1].split(",")[0]) / 1000 + 60
             last_min = f"{datetime.fromtimestamp(t, timezone.utc):%Y-%m-%d %H:%M} UTC"
     out.append(f"crypto recorder: {'running' if running('run_crypto.py live') else 'NOT running'}; last BTC minute {last_min}")
+    from crypto import paper
+    rows = paper.summary(ROOT / "state" / "crypto" / "paper")
+    if rows:
+        out.append(f"crypto paper book ({rows[0]['days']} days to {rows[0]['day']}): " + "; ".join(
+            f"{r['rule']} {r['coin']} Rs{r['free']:,.0f}/Rs{r['india']:,.0f}" for r in rows) + " (no tax / India)")
+    else:
+        out.append("crypto paper book: not started")
     out.append(f"dashboard: {'serving' if running('http.server 8080') else 'not serving'}")
     try:
         out.append(f"free disk: {shutil.disk_usage(ROOT).free / 1e9:.0f} GB")

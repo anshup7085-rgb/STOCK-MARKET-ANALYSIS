@@ -6,6 +6,7 @@ The crypto head's command line (research/BLUEPRINT.md, phase 2). It trades nothi
     PYTHONPATH=. .venv/bin/python run_crypto.py backfill    # the crypto brain's record, 2020 to Oct 2024
     PYTHONPATH=. .venv/bin/python run_crypto.py today       # score yesterday, forecast today (UTC)
     PYTHONPATH=. .venv/bin/python run_crypto.py live        # the minute recorder, forever (deploy/crypto.sh starts it)
+    PYTHONPATH=. .venv/bin/python run_crypto.py paper       # the crypto paper book (ma50, mom30 on BTC and ETH)
 
 Prices come from Binance's free public data. The live recorder also tops up the history every hour and,
 just after midnight UTC (05:30 IST), runs `today` and rebuilds the dashboard, so the crypto head runs by
@@ -184,10 +185,20 @@ def cmd_live(args=None) -> int:
             cmd_download(argparse.Namespace(verbose=False), log=lambda m: print(f"{now:%H:%M}{m}", flush=True))
         if now.date() != last_day and now.hour == 0 and 6 <= now.minute < 25:
             last_day = now.date()
-            for cmd in (["run_crypto.py", "today"], ["dashboard/build.py"]):
+            for cmd in (["run_crypto.py", "today"], ["run_crypto.py", "paper"], ["dashboard/build.py"]):
                 subprocess.run([sys.executable, *cmd], cwd=REPO, env={**os.environ, "PYTHONPATH": str(REPO)}, timeout=600,
                                stdout=sys.stdout, stderr=sys.stdout)
         _time.sleep(60 - NOW().second + 5)
+
+
+def cmd_paper(args=None) -> int:
+    from crypto import paper
+    for line in paper.run(NOW()):
+        print(line)
+    for r in paper.summary():
+        print(f"  {r['rule']:<6} {r['coin']}: {'holding' if r['in'] else 'in cash'}; worth Rs{r['free']:,.0f} with no tax, "
+              f"Rs{r['india']:,.0f} after India's tax (from Rs{paper.CAPITAL:,.0f} on {r['since']})")
+    return 0
 
 
 def main() -> int:
@@ -196,7 +207,8 @@ def main() -> int:
     for name, fn, h in (("download", cmd_download, "daily and hourly candles, new ones only"),
                         ("backfill", cmd_backfill, "the crypto brain's record, 2020 to Oct 2024"),
                         ("today", cmd_today, "score yesterday, forecast today (UTC)"),
-                        ("live", cmd_live, "the minute recorder, forever")):
+                        ("live", cmd_live, "the minute recorder, forever"),
+                        ("paper", cmd_paper, "the crypto paper book: today's decisions and values")):
         sub.add_parser(name, help=h).set_defaults(fn=fn)
     args = ap.parse_args()
     return args.fn(args)
