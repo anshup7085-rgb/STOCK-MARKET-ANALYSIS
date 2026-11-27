@@ -1,4 +1,4 @@
-# Status: the one page that is kept true (26 Nov 2026)
+# Status: the one page that is kept true (27 Nov 2026)
 
 Read this first. Where another document disagrees with this page, this page is right and that
 document is out of date.
@@ -50,6 +50,7 @@ real data is pending.
 | The explorer's nine strategies, replayed on Oct 2021–Oct 2024 | All lose or are flat after costs |
 | Opening-range breakout, by future and by bought option | Both fail. Fees take the future's; time decay takes the option's |
 | Selling the straddle only when options are dear | Adds nothing outside expiry day |
+| Crypto futures desk (the idea of a post the holder showed: tree model, trades ranked by profit per minute), five coins, Jan 2022 to Oct 2024 (`research/perps_lab.py`) | **No edge**, 27 Nov: the model does predict, but 1 to 8 bps a trade against 16 bps of costs; it loses at 15-, 60- and 240-minute horizons on every coin |
 | **Selling the at-the-money straddle on expiry day** | The one effect standing, and on 15 Nov it repeated on all four other indexes tried (SENSEX, BANKNIFTY, FINNIFTY, MIDCPNIFTY), by a rule fixed before their data was read. Still exploration, not a passed test; it is a seller's trade: one lot needs roughly ₹1.5–2.5 lakh of margin. A power check (23 Nov) found a held-back test would pass only about 8% of the time even if the effect is real, so no test slot is spent; it is followed forward on paper |
 
 Nothing has a measured edge. The correct trading output today is **NO TRADE**.
@@ -58,8 +59,8 @@ Nothing has a measured edge. The correct trading output today is **NO TRADE**.
 
 1. **The expiry-day straddle, followed forward on paper** (Tuesdays, `research/INTRADAY_LOG.md` step 34).
 2. **Momentum and the opening gap** on ten years of NIFTY minutes (steps 9 and 15): they need one `morning`.
-3. **Market Lab** (`research/BLUEPRINT.md`): the crypto head runs (steps 31 to 38); next a themes page, the
-   news lab and the human desk.
+3. **Market Lab** (`research/BLUEPRINT.md`): the crypto head runs (steps 31 to 44; the futures desk found no
+   edge after costs); next a themes page, the news lab and the human desk.
 4. **The events calendar** (RBI, Budget, elections, US Fed).
 5. **A daily check of the simulator** against what the paper book really did.
 6. **The live order path** only after something passes: today `trading/fno/` cannot place an order.

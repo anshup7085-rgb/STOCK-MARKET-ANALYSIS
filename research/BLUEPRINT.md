@@ -33,7 +33,7 @@ follows it. `STATUS.md` says what is done today; this page is the plan.
 | Phase | What | Estimate | State |
 |---|---|---|---|
 | 1 | **The shared core and the dashboard.** The paper engine, scorekeeper and reports made usable by any market; the dashboard, served privately | 1–2 weeks | Dashboard v0 built 20 Nov |
-| 2 | **Crypto head.** Free live data from the exchanges, a crypto brain, the first strategies on paper | 1–2 weeks | Prices (history and a live minute recorder) and the crypto brain built 21 Nov; strategies next |
+| 2 | **Crypto head.** Free live data from the exchanges, a crypto brain, the first strategies on paper | 1–2 weeks | Prices (history and a live minute recorder) and the crypto brain built 21 Nov; daily rules on paper from 25 Nov; the futures desk tested 27 Nov: no edge after costs |
 | 3 | **News lab and human desk** | 2 weeks | |
 | 4 | **India head grows**: stocks and MCX commodities beside F&O | 2–3 weeks | |
 | 5 | **US stocks and other countries** | later | |
