@@ -50,7 +50,7 @@ real data is pending.
 | The explorer's nine strategies, replayed on Oct 2021–Oct 2024 | All lose or are flat after costs |
 | Opening-range breakout, by future and by bought option | Both fail. Fees take the future's; time decay takes the option's |
 | Selling the straddle only when options are dear | Adds nothing outside expiry day |
-| Crypto futures desk (the idea of a post the holder showed: tree model, trades ranked by profit per minute), five coins, Jan 2022 to Oct 2024 (`research/perps_lab.py`) | **No edge**, 27 Nov: the model does predict, but 1 to 8 bps a trade against 16 bps of costs; it loses at 15-, 60- and 240-minute horizons on every coin |
+| Crypto futures desk (the idea of a post the holder showed: tree model, trades ranked by profit per minute), five coins, Jan 2022 to Oct 2024 (`research/perps_lab.py`) | **No edge**, 27 Nov: the model does predict, but 1 to 8 bps a trade against 16 bps of costs; it loses at 15-, 60- and 240-minute horizons on every coin. With limit orders and honest fills (`research/perps_maker.py`) it still loses 3.4 bps a trade: closed |
 | **Selling the at-the-money straddle on expiry day** | The one effect standing, and on 15 Nov it repeated on all four other indexes tried (SENSEX, BANKNIFTY, FINNIFTY, MIDCPNIFTY), by a rule fixed before their data was read. Still exploration, not a passed test; it is a seller's trade: one lot needs roughly ₹1.5–2.5 lakh of margin. A power check (23 Nov) found a held-back test would pass only about 8% of the time even if the effect is real, so no test slot is spent; it is followed forward on paper |
 
 Nothing has a measured edge. The correct trading output today is **NO TRADE**.

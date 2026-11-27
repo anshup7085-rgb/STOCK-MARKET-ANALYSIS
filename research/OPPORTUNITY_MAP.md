@@ -35,7 +35,7 @@ useful, not yet · **SKIP** not worth it.
 | Rules written down before the test, judged by the betting test | Stops us fooling ourselves | HAVE |
 | Past-data test of weekly strategies, 2019 to 2026, end of day | A first verdict in weeks, not years | DONE: V-H **failed** (31 Oct): 243 trades, 69.5% won, mean R −0.021. V never goes live. The downloaded files (1,923 sessions) stay on the server for later registered tests |
 | Intraday replay of the explorer's strategies on minute history | The same, for intraday | DONE (5–6 Nov): every strategy loses or is flat after costs, Oct 2021–Oct 2024; only the expiry-day straddle shows a small effect (`research/INTRADAY_LOG.md`) |
-| Crypto futures desk: a tree model ranking short trades on five coins | The idea from the post the holder showed (27 Nov) | DONE (27 Nov): **no edge**. It predicts 1 to 8 bps a trade; costs are 16. Lesson: below a few hours, costs decide (`research/INTRADAY_LOG.md` step 44) |
+| Crypto futures desk: a tree model ranking short trades on five coins | The idea from the post the holder showed (27 Nov) | DONE (27 Nov): **no edge**. It predicts 1 to 8 bps a trade; costs are 16. With limit orders and honest fills it still loses 3.4 bps a trade (step 46). Lesson: below a few hours, costs decide; closed |
 | Quick idea screening on AlgoTest or Stockmock (AlgoTest: from ₹499 for 500 backtests, free weekly backtests, **reported**) | A fast filter for ideas like your cousin's; never proof | LATER, optional |
 | Paper fills against real fills | Measures how much worse real orders fill | At the small-money stage |
 
