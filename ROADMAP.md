@@ -1,7 +1,8 @@
 # Roadmap
 
 Where this project is, where it goes, and — the part that matters — what
-evidence is required before it touches money.
+evidence is required before it touches money. **Today's state is in `STATUS.md`;**
+the gates and kill criteria below still bind.
 
 ## Where we are
 
@@ -15,8 +16,10 @@ evidence is required before it touches money.
 | Does the score predict? | **No.** Gate 1 failed on real data, 2026-10-17: Spearman −0.015 over 10,399 non-overlapping trades, net expectancy +0.008R with a 95% CI spanning zero. Kill criterion 1 applies — the score is retired as a ranking tool. See `reports/2026-10-17-gate1.md` |
 | Pre-registered strategies | **A, B and B+A all failed**, 2026-10-17: the index trend filter cut drawdown (−45% → −26%) but lost on Sharpe and switched too often; 12-1 momentum showed no excess over equal weight (t = −0.20). Rebuilt independently from the spec — same pass/fail on every criterion. See `reports/2026-10-17-strategies-AB.md` |
 | Round 2 (ETF trend timing, T) | **Not evaluable → FAIL**, 2026-10-22: Yahoo's NIFTYBEES/GOLDBEES history has zero volume for most of 2012–13 and 10×/100× price errors around the December 2019 unit splits; the registered rules forbid repairs after the data is seen. Confirmed by two clean-room rebuilds. Says nothing about trend timing itself. See `reports/2026-10-22-round2.md` |
-| Round 3 (F&O, strategy V) | **Drafted 2026-10-22, revised 2026-10-23 after independent review; binds before any real option price is seen.** A defined-risk NIFTY weekly iron condor, paper-traded forward from live option quotes, settled at NSE's final settlement price. The engine (`trading/fno/`) is built and tested offline. It refuses real feeds until the registration binds, and starts when a data plan (Kite Connect or Groww) and a market-hours machine exist. It is judged by an anytime-valid betting test; a simulation showed a t-test passes noise 1.6–4.5% of the time on skewed option P&L. A missed week counts as a full loss, so skipping weeks cannot flatter it. See `research/PREREGISTRATION_3.md` |
-| Research budget | Historical family: 5 of 10 slots spent on Indian price history to 2026-10-18. Forward family (declared in PREREGISTRATION_3): V takes forward slot 1 of 10 once it binds |
+| Round 3 (F&O, strategy V) | **Drafted 2026-10-22, revised after three independent reviews, bound 2026-10-23 before any real option price was seen, amended once the same day before the book started (NSE's settlement file read correctly).** A defined-risk NIFTY weekly iron condor, paper-traded forward from live option quotes, settled at NSE's final settlement price. The engine (`trading/fno/`) is built and tested offline. It starts when a data plan (Kite Connect or Groww) and a market-hours machine exist. It is judged by an anytime-valid betting test; a simulation showed a t-test passes noise 1.6–4.5% of the time on skewed option P&L. A missed week counts as a full loss, so skipping weeks cannot flatter it. See `research/PREREGISTRATION_3.md` |
+| F&O intraday explorer | **Built 2026-10-23, paper only.** Many intraday strategies at once on NIFTY futures and options, in any combination of legs (covered calls FUT+ CE−, synthetic puts CE+ FUT−, spreads, straddles, condors, flies, ratios). Contracts by rule, fills at the touch, risk fixed in rupees at entry, every cost on the fee card, a hash-chained journal. Exploration, not evidence: its screen (the betting statistic at α/m) only picks strategies for a registered forward test. See `TRADING.md` |
+| Round 4 (V-H, V on NSE's daily files 2019–2026) | **Bound 2026-10-30, run 2026-10-31: FAIL.** 243 trades over 390 weekly cycles: won 69.5% of the time and still lost (mean R −0.021, net −₹24,558; roughly break-even even with no fill penalty). Under the registrations, V never takes a live step; its forward paper track continues as a cost and fill measurement. See `research/PREREGISTRATION_4.md`, `research/ROUND4_LOG.md` |
+| Research budget | Historical family: 6 of 10 slots spent on Indian price history to 2026-10-18 (slot 6: V-H, failed). Forward family (declared in PREREGISTRATION_3): V holds forward slot 1 of 10 (bound 2026-10-23) |
 | Strategy with a measured edge | **None.** The correct trading output is NO TRADE. V's paper record is a test in progress, not an edge |
 | Sector / breadth | Not built |
 | Tradability gates | Partial — corporate-action detection and a restricted list built; holiday calendar built, holding the rest of 2026 from secondary sources and **unverified** until checked against the NSE circular; F&O ban is not a cash-segment restriction |
@@ -70,10 +73,10 @@ becomes negotiable.
 
 ## Horizons
 
-**Now (days)**
-- Unblock a market feed, or accept that we are building blind
-- Run the backtest on real NSE history and publish the number, whatever it is
-- Write the first `catalysts.json` by hand, with sources and dates
+**Now (days)** — as of 10 Nov 2026, see `STATUS.md`, "Next, in order"
+- ~~Unblock a market feed~~ — done 17 Oct (Yahoo), 26 Oct (Kite), 4 Nov (Dhan)
+- ~~Run the backtest on real NSE history and publish the number~~ — done 17 Oct: failed
+- Intraday F&O: more index data, replication of the expiry-day effect, the buyer's side
 
 **Next (weeks)**
 - Sector rotation and breadth, so the regime call stops resting on one index
@@ -107,7 +110,10 @@ available. Abandon the scoring model as a ranking tool if:
 A negative result is not a wasted project. It is the most valuable thing this
 system can tell you, and it is built to be able to say it.
 
-## The current blocker
+## The blocker of October 2026 (resolved; kept as the record)
+
+Resolved: Yahoo was allowlisted on 17 Oct; the server in Mumbai reads Kite (from 26 Oct), NSE's
+archives and Dhan directly. What follows is the note as written then.
 
 No market feed is reachable. Yahoo, NSE and BSE all return 403 to the egress
 gateway; a headless Chromium hits the identical wall, and a no-proxy request

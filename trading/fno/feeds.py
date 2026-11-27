@@ -33,13 +33,19 @@ from market.calendar import TradingCalendar, load_calendar
 from market.config import IST
 from market.providers.base import DataUnavailable
 from trading.fno.model import (ContractMaster, IndexQuote, OptionContract, Quote, as_ist,
-                               from_groww_frame, from_kite_rows)
+                               from_groww_frame, from_kite_rows, futures_from_groww_frame,
+                               futures_from_kite_rows)
 
-_FORBIDDEN_ENV = re.compile(r"(TOTP|PASSWORD|PASSWD|MPIN|^PIN$|_PIN$|(KITE|GROWW)_\w*SECRET|LIVE_TRADING_ACK)", re.I)
+# A broker or API secret, TOTP seed, password or broker PIN. Twilio's API secret is
+# the one exception the project allows (deploy/lib.sh): unattended alerts need it.
+# Other services' credentials (cloud keys and the like) are not the runner's concern.
+_FORBIDDEN_ENV = re.compile(
+    r"((KITE|GROWW|ZERODHA|BROKER)\w*SECRET|^API_SECRET$|_API_SECRET$|TOTP|PASSWORD|PASSWD"
+    r"|^(KITE|GROWW|ZERODHA)_\w*PIN$|^M?PIN$|LIVE_TRADING_ACK)", re.I)
 
 
 def refuse_secrets_in_env() -> None:
-    bad = sorted(k for k in os.environ if _FORBIDDEN_ENV.search(k))
+    bad = sorted(k for k in os.environ if _FORBIDDEN_ENV.search(k) and not k.upper().startswith("TWILIO_"))
     if bad:
         raise DataUnavailable(
             f"refusing to start: {', '.join(bad)} set in the environment. None of these belong "
@@ -68,9 +74,18 @@ class FnoFeed(ABC):
         """The broker's margin for the four orders as one basket, where its API gives it."""
         return None
 
+    def margin_for(self, orders: list[dict]) -> dict | None:
+        """The broker's margin for a basket of {symbol, side, qty, price} orders, where its API gives it.
+        Read-only: the broker's margin calculator, never an order."""
+        return None
+
     def broker_charges(self, legs: list[dict], qty: int) -> dict | None:
         """The broker's own computed charges per order, where its API gives them."""
         return None
+
+    def fno_master(self, underlying: str) -> ContractMaster:
+        """Options and near futures together, for the intraday explorer. V reads contract_master only."""
+        raise DataUnavailable(f"{self.name}: no futures listing")
 
     def probe(self, underlying: str) -> dict:
         """Response shapes for the first-morning check. Values that are prices are not printed."""
@@ -115,6 +130,7 @@ class KiteFnoFeed(FnoFeed):
     name = "Zerodha Kite Connect (read-only)"
     INDEX = {"NIFTY": ("NSE", "NIFTY 50")}
     BATCH = 200                       # the per-call cap was not confirmed; stay well under it
+    QUOTE_GAP_S = 1.05                # Kite is reported to allow one quote request a second
 
     def __init__(self):
         refuse_secrets_in_env()
@@ -129,6 +145,18 @@ class KiteFnoFeed(FnoFeed):
         self._kite = KiteConnect(api_key=key)
         self._kite.set_access_token(token)
         self._index_token: dict[str, int] = {}
+        self._last_quote = None
+
+    def _quote(self, keys: list[str]) -> dict:
+        """Every /quote call, spaced: a rate-limit refusal at every slot would make every week MISSED."""
+        if self._last_quote is not None:
+            wait = self._last_quote + self.QUOTE_GAP_S - _time.monotonic()
+            if wait > 0:
+                _time.sleep(wait)
+        try:
+            return self._kite.quote(keys)
+        finally:
+            self._last_quote = _time.monotonic()
 
     def contract_master(self, underlying: str) -> ContractMaster:
         try:
@@ -137,6 +165,16 @@ class KiteFnoFeed(FnoFeed):
             raise DataUnavailable(f"Kite NFO instrument dump failed: {exc}") from exc
         return ContractMaster(from_kite_rows(rows, underlying), self.name, datetime.now(IST))
 
+    def fno_master(self, underlying: str) -> ContractMaster:
+        try:
+            rows = self._kite.instruments("NFO")
+        except Exception as exc:
+            raise DataUnavailable(f"Kite NFO instrument dump failed: {exc}") from exc
+        futs = futures_from_kite_rows(rows, underlying)
+        if not futs:
+            raise DataUnavailable(f"Kite's NFO dump lists no {underlying} futures")
+        return ContractMaster(from_kite_rows(rows, underlying) + futs, self.name, datetime.now(IST))
+
     def _index_key(self, underlying: str) -> str:
         exch, sym = self.INDEX[underlying]
         return f"{exch}:{sym}"
@@ -144,12 +182,14 @@ class KiteFnoFeed(FnoFeed):
     def index_quote(self, underlying: str) -> IndexQuote:
         key = self._index_key(underlying)
         try:
-            d = self._kite.quote([key]).get(key)
+            d = self._quote([key]).get(key)
         except Exception as exc:
             raise DataUnavailable(f"Kite quote for {key} failed: {exc}") from exc
         if not d or not d.get("last_price"):
             raise DataUnavailable(f"Kite returned no value for {key}")
-        return IndexQuote(float(d["last_price"]), as_ist(d.get("timestamp")), datetime.now(IST))
+        ohlc = d.get("ohlc") or {}
+        o, h, lo = (float(ohlc[k]) if ohlc.get(k) else None for k in ("open", "high", "low"))
+        return IndexQuote(float(d["last_price"]), as_ist(d.get("timestamp")), datetime.now(IST), o, h, lo)
 
     def quotes(self, contracts: list[OptionContract]) -> dict[str, Quote]:
         out: dict[str, Quote] = {}
@@ -157,7 +197,7 @@ class KiteFnoFeed(FnoFeed):
             chunk = contracts[i:i + self.BATCH]
             keys = [f"{c.exchange}:{c.symbol}" for c in chunk]
             try:
-                data = self._kite.quote(keys)
+                data = self._quote(keys)
             except Exception as exc:
                 raise DataUnavailable(f"Kite option quotes failed: {exc}") from exc
             now = datetime.now(IST)
@@ -205,6 +245,16 @@ class KiteFnoFeed(FnoFeed):
             return {"error": str(exc)[:200]}
         return {"initial": (r.get("initial") or {}).get("total"), "final": (r.get("final") or {}).get("total")}
 
+    def margin_for(self, orders: list[dict]) -> dict | None:
+        basket = [{"exchange": "NFO", "tradingsymbol": o["symbol"], "transaction_type": o["side"], "variety": "regular",
+                   "product": "NRML", "order_type": "LIMIT", "quantity": int(o["qty"]), "price": o["price"],
+                   "trigger_price": 0} for o in orders]
+        try:
+            r = self._kite.basket_order_margins(basket, consider_positions=False, mode="compact")
+        except Exception as exc:
+            return {"error": str(exc)[:200]}
+        return {"initial": (r.get("initial") or {}).get("total"), "final": (r.get("final") or {}).get("total")}
+
     def broker_charges(self, legs: list[dict], qty: int) -> dict | None:
         try:
             rows = self._kite.get_virtual_contract_note(self._orders(legs, qty, "average_price"))
@@ -224,8 +274,8 @@ class KiteFnoFeed(FnoFeed):
             ks = m.strikes(e, "CE")
             c = m.get(e, ks[len(ks) // 2], "CE")
             key = f"{c.exchange}:{c.symbol}"
-            out["option_quote_shape"] = _shape(self._kite.quote([key]).get(key))
-        out["index_quote_shape"] = _shape(self._kite.quote([self._index_key(underlying)]).get(self._index_key(underlying)))
+            out["option_quote_shape"] = _shape(self._quote([key]).get(key))
+        out["index_quote_shape"] = _shape(self._quote([self._index_key(underlying)]).get(self._index_key(underlying)))
         return out
 
 
@@ -257,12 +307,28 @@ class GrowwFnoFeed(FnoFeed):
         self._pause = pause_s
         self._index_symbol: dict[str, str] = {}
 
-    def contract_master(self, underlying: str) -> ContractMaster:
+    def _instruments(self):
+        """Groww's public instrument CSV, fetched here with a timeout (the SDK's own download has none)."""
+        import io
+
+        import pandas as pd
+        import requests
         try:
-            df = self._api.get_all_instruments()
+            r = requests.get(self._api.INSTRUMENT_CSV_URL, timeout=60)
+            r.raise_for_status()
+            return pd.read_csv(io.BytesIO(r.content), dtype=str)
         except Exception as exc:
             raise DataUnavailable(f"Groww instrument CSV failed: {exc}") from exc
-        return ContractMaster(from_groww_frame(df, underlying), self.name, datetime.now(IST))
+
+    def contract_master(self, underlying: str) -> ContractMaster:
+        return ContractMaster(from_groww_frame(self._instruments(), underlying), self.name, datetime.now(IST))
+
+    def fno_master(self, underlying: str) -> ContractMaster:
+        df = self._instruments()
+        futs = futures_from_groww_frame(df, underlying)
+        if not futs:
+            raise DataUnavailable(f"Groww's instrument CSV lists no {underlying} futures")
+        return ContractMaster(from_groww_frame(df, underlying) + futs, self.name, datetime.now(IST))
 
     def _quote(self, symbol: str, segment: str) -> dict:
         _time.sleep(self._pause)
@@ -299,20 +365,46 @@ class GrowwFnoFeed(FnoFeed):
                                   as_ist(_first(d, self._TS)), datetime.now(IST))
         return out
 
+    @staticmethod
+    def daily_close(payload, day: date) -> float | None:
+        """
+        The close of `day` from a Groww daily-candle payload. Rows are lists
+        [ts, o, h, l, c, v] or [ts, o, h, l, c, v, oi], or dicts; an index's
+        volume may be null. Epoch timestamps are converted to IST before dating.
+        """
+        rows = None
+        if isinstance(payload, dict):
+            for k in ("candles", "candleList", "data", "historicalCandles"):
+                if payload.get(k):
+                    rows = payload[k]
+                    break
+        for row in rows or []:
+            if isinstance(row, dict):
+                ts, close = row.get("timestamp") or row.get("ts") or row.get("time"), row.get("close")
+            elif isinstance(row, (list, tuple)) and len(row) >= 5:
+                ts, close = row[0], row[4]
+            else:
+                continue
+            when = as_ist(ts)
+            try:
+                c = float(close)
+            except (TypeError, ValueError):
+                continue
+            if when is not None and when.date() == day and math.isfinite(c) and c > 0:
+                return c
+        return None
+
     def index_close(self, underlying: str, day: date) -> float | None:
-        from market.providers.groww import GrowwProvider
         try:
             if underlying not in self._index_symbol:
                 inst = self._api.get_instrument_by_exchange_and_trading_symbol("NSE", self.INDEX[underlying])
                 self._index_symbol[underlying] = str(inst["groww_symbol"])
             payload = self._api.get_historical_candles(
                 exchange="NSE", segment="CASH", groww_symbol=self._index_symbol[underlying],
-                start_time=f"{day} 09:00:00", end_time=f"{day} 23:59:59", candle_interval="1day", timeout=30)
-            df = GrowwProvider._to_frame(payload, underlying)
+                start_time=f"{day} 00:00:00", end_time=f"{day} 23:59:59", candle_interval="1day", timeout=30)
         except Exception:
             return None
-        rows = df[[ts.date() == day for ts in df.index]]
-        return float(rows["close"].iloc[-1]) if len(rows) else None
+        return self.daily_close(payload, day)
 
     def basket_margin(self, legs: list[dict], qty: int) -> dict | None:
         orders = [{"trading_symbol": leg["symbol"], "transaction_type": leg["side"], "quantity": qty,
@@ -334,6 +426,17 @@ class GrowwFnoFeed(FnoFeed):
             c = m.get(e, ks[len(ks) // 2], "CE")
             out["option_quote_shape"] = _shape(self._quote(c.symbol, "FNO"))
         out["index_quote_shape"] = _shape(self._quote(self.INDEX[underlying], "CASH"))
+        try:
+            yday = datetime.now(IST).date() - timedelta(days=1)
+            if underlying not in self._index_symbol:
+                inst = self._api.get_instrument_by_exchange_and_trading_symbol("NSE", self.INDEX[underlying])
+                self._index_symbol[underlying] = str(inst["groww_symbol"])
+            out["index_daily_candle_shape"] = _shape(self._api.get_historical_candles(
+                exchange="NSE", segment="CASH", groww_symbol=self._index_symbol[underlying],
+                start_time=f"{yday - timedelta(days=6)} 00:00:00", end_time=f"{yday} 23:59:59",
+                candle_interval="1day", timeout=30))
+        except Exception as exc:
+            out["index_daily_candle_shape"] = f"failed: {type(exc).__name__}: {str(exc)[:160]}"
         return out
 
 
@@ -341,14 +444,24 @@ class GrowwFnoFeed(FnoFeed):
 
 BHAVCOPY_URL = "https://nsearchives.nseindia.com/content/fo/BhavCopy_NSE_FO_0_0_0_{d:%Y%m%d}_F_0000.csv.zip"
 _BHAV_COLS = ("TckrSymb", "FinInstrmTp", "XpryDt", "StrkPric", "OptnTp", "SttlmPric")
+_BHAV_UNDERLYING = "UndrlygPric"
 
 
 def fsp_from_bhavcopy(rows, underlying: str, expiry: date) -> tuple[float | None, dict]:
     """
-    The final settlement price implied by NSE's settlement prices for the
-    expiring index options: K + S for an in-the-money call, K - S for a put.
-    They must agree to the paisa, from at least four contracts; otherwise None.
-    No column of NSE's file is assumed: a missing one is reported by name.
+    PREREGISTRATION_3 section 3, step 1 (amendment 1), from the rows of the
+    expiring index options:
+
+      - NSE's layout: every expiring option carries the underlying's final
+        settlement price in SttlmPric, equal to UndrlygPric (seen on 19 Oct 2026:
+        all 208 expiring NIFTY rows carried 22888.95 in both). If every row
+        carries one positive SttlmPric, equal to its UndrlygPric to the paisa,
+        across at least four distinct contracts, that is P.
+      - Otherwise, if the file gives each option its own value: K + S for an
+        in-the-money call, K - S for a put, at least four distinct contracts
+        agreeing to the paisa.
+
+    Anything else gives None. Every column read is checked by name.
     """
     import pandas as pd
     df = rows if isinstance(rows, pd.DataFrame) else pd.DataFrame(rows)
@@ -358,20 +471,44 @@ def fsp_from_bhavcopy(rows, underlying: str, expiry: date) -> tuple[float | None
     exp = pd.to_datetime(df["XpryDt"], errors="coerce").dt.date
     sel = df.loc[(df["TckrSymb"].astype(str).str.upper() == underlying)
                  & (df["FinInstrmTp"].astype(str).str.upper() == "IDO") & (exp == expiry)]
-    vals = []
+    parsed = []
     for r in sel.to_dict("records"):
         try:
             k, sp = float(r["StrkPric"]), float(r["SttlmPric"])
         except (TypeError, ValueError):
             continue
-        if sp > 0:
-            vals.append(k + sp if str(r["OptnTp"]).upper() == "CE" else k - sp)
-    if len(vals) < 4:
-        return None, {"error": f"{len(vals)} in-the-money settlement prices for {underlying} {expiry}", "rows": len(sel)}
-    vals.sort()
-    if round(vals[-1] - vals[0], 2) > 0.01:
-        return None, {"error": f"implied values disagree: {vals[0]:.2f} to {vals[-1]:.2f}", "n": len(vals)}
-    return round(vals[len(vals) // 2], 2), {"n": len(vals), "spread": round(vals[-1] - vals[0], 4)}
+        right = str(r["OptnTp"]).strip().upper()
+        if math.isfinite(k) and math.isfinite(sp) and right in ("CE", "PE"):
+            parsed.append((k, right, round(sp, 2), r.get(_BHAV_UNDERLYING)))
+    contracts = {(k, right) for k, right, _, _ in parsed}
+    held = {sp for _, _, sp, _ in parsed}
+    if len(held) == 1 and next(iter(held)) > 0:                  # NSE's layout: one value on every row
+        v = next(iter(held))
+        if len(contracts) < 4:
+            return None, {"error": f"{len(contracts)} expiring contracts for {underlying} {expiry}", "rows": len(sel)}
+        if _BHAV_UNDERLYING not in df.columns:
+            return None, {"error": f"bhavcopy lacks {[_BHAV_UNDERLYING]}", "columns": list(df.columns)[:40]}
+        und = set()
+        for *_, u in parsed:
+            try:
+                und.add(round(float(u), 2))
+            except (TypeError, ValueError):
+                und.add(None)
+        if und != {v}:
+            return None, {"error": f"every expiring row carries {v:.2f}, but {_BHAV_UNDERLYING} is {sorted(und, key=str)[:3]}",
+                          "n": len(contracts)}
+        return v, {"n": len(contracts), "reading": "uniform"}
+    vals, itm = [], set()                                         # each option's own value
+    for k, right, sp, _ in parsed:
+        if sp <= 0:
+            continue
+        vals.append(round(k + sp if right == "CE" else k - sp, 2))
+        itm.add((k, right))
+    if len(itm) < 4:
+        return None, {"error": f"{len(itm)} in-the-money contracts for {underlying} {expiry}", "rows": len(sel)}
+    if len(set(vals)) != 1:
+        return None, {"error": f"implied values disagree: {min(vals):.2f} to {max(vals):.2f}", "n": len(itm)}
+    return vals[0], {"n": len(itm), "reading": "per-option"}
 
 
 def nse_fsp(underlying: str, expiry: date, timeout: int = 20) -> tuple[float | None, dict]:
@@ -488,6 +625,36 @@ class MockFnoFeed(FnoFeed):
                                              freeze_qty=self.lot * 54))
         return ContractMaster(cs, self.name, now)
 
+    def _monthlies(self, today: date) -> list[date]:
+        """The last expiry weekday of each month, moved back over holidays: three, from this month."""
+        out, y, m = [], today.year, today.month
+        while len(out) < 3:
+            d = (date(y + m // 12, m % 12 + 1, 1) - timedelta(days=1))
+            while d.weekday() != self.expiry_weekday:
+                d -= timedelta(days=1)
+            while not self.cal.is_trading_day(d):
+                d -= timedelta(days=1)
+            if d >= today:
+                out.append(d)
+            y, m = y + m // 12, m % 12 + 1
+        return out
+
+    def fno_master(self, underlying: str) -> ContractMaster:
+        now = self.now_fn()
+        opts = self.contract_master(underlying)
+        listed = set(opts.expiries())
+        cs = list(opts.contracts)
+        for e in self._monthlies(now.date()):
+            cs.append(OptionContract(f"{underlying}{e:%y%b}FUT".upper(), underlying, e, 0.0, "FUT", self.lot, 0.05,
+                                     freeze_qty=self.lot * 27))
+            if e not in listed:            # the monthly options, as on NSE, expire with the future
+                ref = round(self.close_on(now.date() - timedelta(days=1)) / 100) * 100
+                for k in np.arange(ref - 3000, ref + 3001, 100):
+                    for right in ("CE", "PE"):
+                        cs.append(OptionContract(f"{underlying}{e:%y%m%d}{int(k)}{right}", underlying, e, float(k),
+                                                 right, self.lot, 0.05, freeze_qty=self.lot * 27))
+        return ContractMaster(cs, self.name, now)
+
     def index_quote(self, underlying: str) -> IndexQuote:
         now = self.now_fn()
         return IndexQuote(round(self._spot(now), 2), now, now)
@@ -502,8 +669,11 @@ class MockFnoFeed(FnoFeed):
         for c in contracts:
             close_dt = datetime.combine(c.expiry, time(15, 30), IST)
             t = max(0.0, (close_dt - now).total_seconds()) / (365 * 86400)
-            mid = black76(s, c.strike, t, self._vol(s, c.strike), c.right)
-            h = max(0.05, self.half_spread * mid)
+            if c.right == "FUT":
+                mid = s * math.exp(0.065 * t)               # cost of carry at an assumed 6.5%
+            else:
+                mid = black76(s, c.strike, t, self._vol(s, c.strike), c.right)
+            h = max(0.05, (0.00002 if c.right == "FUT" else self.half_spread) * mid)
             bid = math.floor((mid - h) / 0.05) * 0.05
             ask = math.ceil((mid + h) / 0.05) * 0.05
             out[c.symbol] = Quote(c.symbol, round(bid, 2) if bid >= 0.05 else None, round(max(ask, 0.05), 2),
@@ -515,3 +685,38 @@ class MockFnoFeed(FnoFeed):
         if day > now.date() or (day == now.date() and now.time() < time(15, 30)):
             return None
         return round(self.close_on(day), 2)
+
+
+class MockIntradayFeed(MockFnoFeed):
+    """
+    MockFnoFeed with a day inside it: an opening gap, then a seeded Brownian
+    bridge minute by minute to the day's close. SYNTHETIC — for the explorer's
+    tests and demo only; no strategy result on it says anything about a market.
+    """
+
+    def __init__(self, now_fn, intraday_vol: float = 0.007, gap_vol: float = 0.003, **kw):
+        super().__init__(now_fn, **kw)
+        self.intraday_vol, self.gap_vol = intraday_vol, gap_vol
+        self._paths: dict[date, np.ndarray] = {}
+
+    def _path(self, d: date) -> np.ndarray:
+        if d not in self._paths:
+            prev, close = self.close_on(d - timedelta(days=1)), self.close_on(d)
+            rng = np.random.default_rng([self.seed, d.toordinal(), 1])
+            open_ = prev * math.exp(rng.normal(0, self.gap_vol))
+            n = 375
+            w = np.concatenate([[0.0], np.cumsum(rng.normal(0, self.intraday_vol / math.sqrt(n), n))])
+            t = np.linspace(0, 1, n + 1)
+            self._paths[d] = open_ * np.exp(t * math.log(close / open_) + w - t * w[-1])
+        return self._paths[d]
+
+    def _spot(self, now: datetime) -> float:
+        d = now.date()
+        if not self.cal.is_trading_day(d):
+            return self.close_on(d - timedelta(days=1))
+        if now.time() < time(9, 15):
+            return self.close_on(d - timedelta(days=1))
+        x = min(375.0, ((now.hour * 60 + now.minute) - (9 * 60 + 15)) + now.second / 60)
+        path, i = self._path(d), int(x)
+        return float(path[i] if i >= 375 else path[i] + (path[i + 1] - path[i]) * (x - i))
+

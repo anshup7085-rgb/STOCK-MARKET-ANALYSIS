@@ -1,5 +1,10 @@
 # Stock Market Analysis — NSE research agent
 
+**Current status, in one page: [`STATUS.md`](STATUS.md).** The project began as an equity scanner (the
+rest of this page) and is now an intraday NSE F&O research and paper-trading system; the equity score
+below failed its test on 17 Oct 2026 and is retired. Its code stays because the journal, risk engine and
+broker adapters are the base of any later live path.
+
 An evidence-driven market-intelligence and trading system for NSE equities.
 A Python scanner does the arithmetic; an agent does the judgement; a gated
 execution layer acts on the plan. The research half (`market/`) is **read-only
@@ -47,9 +52,9 @@ The cache is Yahoo data and stays out of git, so the reported numbers reproduce
 only from the frozen cache; a fresh fetch is a different window, and
 `run_research.py` says so instead of printing different numbers as the same run.
 
-**Where it stands (2026-10-17): nothing here has a measured edge.** The score
-failed Gate 1 (`reports/2026-10-17-gate1.md`); strategies A, B and B+A failed
-their pre-registered tests (`reports/2026-10-17-strategies-AB.md`). NO TRADE.
+**Where it stands: nothing here has a measured edge** (see `STATUS.md` for today's
+state). The score failed Gate 1 (`reports/2026-10-17-gate1.md`); strategies A, B and
+B+A failed their pre-registered tests (`reports/2026-10-17-strategies-AB.md`). NO TRADE.
 
 A server for the paper loop: `deploy/setup_server.sh` (see `TRADING.md`).
 

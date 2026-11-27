@@ -182,7 +182,7 @@ before you pay or trade — these rules changed in 2025–26 and may change agai
 | Zerodha account + Kite Connect app | Order API and, on the paid plan, market data | Zerodha's support pages (checked 2026-10-19): the **Personal** plan is free and covers orders and account APIs but no live or historical data; the **Connect** plan is Rs500/month per API key with live data and historical candles. From October 2026 Zerodha credits the Rs500 in months where you pay at least Rs2,000 of brokerage. Orders alone work on the free plan with `--provider yfinance`; the live price check needs the paid plan or Groww data. |
 | **Static IP**, whitelisted on the app | Zerodha accepts API **orders** only from a registered static IP from 1 April 2026; read-only calls work from anywhere | Up to two IPs (primary + secondary). Simplest: a small VPS with a static IP, which is also where cron runs. IPs may only be shared within immediate family. |
 | Demat debit authorisation (DDPI) | Automated **sell** orders of delivery holdings — every stop and target here — need it | Without it, sells wait for a per-sell CDSL authorisation and GTT legs can fail. Zerodha charges Rs100 + GST (Rs118) once to activate it (support page, checked 2026-10-19). |
-| A daily manual login | Access tokens expire each morning; SEBI's framework expects a human 2FA login each trading day | `python tools/kite_session.py` — you log in on Zerodha's page; it prints the export line. It never stores your secret or a TOTP seed. |
+| A daily manual login | Access tokens expire each morning; SEBI's framework expects a human 2FA login each trading day | `eval "$(python tools/kite_session.py --eval)"` — you log in on Zerodha's page and paste the address you land on; the token is set in your shell without being shown. It never stores your secret, the token or a TOTP seed. |
 | Algo ID, if required | The exchange framework tags algo orders | Ask Zerodha whether a self-built strategy at this order rate needs one. If they issue one, `export KITE_ALGO_ID=...` and every order carries it. |
 
 **Groww**, if you trade through it instead:
@@ -251,8 +251,8 @@ journal) and gives a forward read on the score, not a strategy worth money.
 
 **Live** — by hand, because each order needs you:
 
-1. ~09:00 — mint today's token (`python tools/kite_session.py` for Zerodha; your
-   own token step for Groww) and export it.
+1. ~09:00 — mint today's token (`eval "$(python tools/kite_session.py --eval)"` for
+   Zerodha; your own token step for Groww).
 2. ~09:20 — `python run_trader.py cycle --mode live --broker kite --provider kite --backtest ...`
    (or `--broker groww --provider groww`).
    It reconciles, scans on yesterday's completed bar, checks each name's live
@@ -295,8 +295,9 @@ idea: a defined-risk NIFTY weekly iron condor (`research/PREREGISTRATION_3.md`).
   trade. The most a trade can lose is fixed when it opens.
 - **What it is not.** It places no order anywhere. There is no `--mode`, no
   operator exit, and no way to go live.
-- **Not yet active.** The engine refuses any real feed until the registration
-  binds (its draft notice is removed and its hash recorded in code).
+- **Bound.** The rules bound on 2026-10-23: the text's hash is recorded in code,
+  and the engine refuses a real feed if the text, the parameters or the
+  checked-out code differ from what was committed.
 
 **What you need**
 
@@ -348,8 +349,9 @@ look dangerous could flatter the result.
 | `fno evaluate [--json F]` | The registered statistic and verdict, plus the descriptive record, from the journal alone |
 | `fno verify` | Re-hash the journal chain |
 | `fno pass --feed F` | One settlement-only pass now (entries happen only in the runner's slots) |
-| `fno settle --expiry D --value V --source URL` | Enter NSE's published settlement price by hand, only after an automatic attempt on a later trading day failed; the URL must be NSE's |
-| `fno switch-feed --feed F --reason R --failed-sessions D1 D2` | Move the book to the other feed, only after the bound one failed every slot of two eligible days |
+| `fno settle --expiry D --file F` | Supply NSE's F&O bhavcopy for the expiry, downloaded by hand, only after an automatic attempt on a later trading day failed. The price is derived from the file; a typed value is never accepted |
+| `fno anchor --append` | Append the journal's head hash to `research/ROUND3_LOG.md`; commit and push it weekly (or send the line to be committed). A PASS cannot be reported without these anchors |
+| `fno switch-feed --feed F --reason R --expiries E1 E2` | Move the book to the other feed, once, only after two adjacent weeks were missed because the bound feed failed |
 | `fno demo` | Synthetic wiring check in a temp directory. Never touches the paper book |
 | `kill --reason R` | For faults or absence only. It blocks entries, and a blocked week counts as missed |
 
@@ -367,11 +369,162 @@ to its fixed maximum.
 - **Live trading is far off.** Even after a PASS, V could not be traded live on
   ₹5,00,000: at the 0.25% live risk cap, one lot needs about ₹16–21 lakh.
 
+## F&O intraday explorer — many strategies, futures and options, paper
+
+V is one strategy, registered and judged. The explorer is the opposite: a
+workbench that paper-trades **many intraday strategies at once** on NIFTY
+futures and options, so the promising ones can be found and then registered
+for a test of their own.
+
+**EXPLORATION, NOT EVIDENCE.** Watch ten strategies for a month and one will
+look good by luck. A strategy earns a claim only through its own registered
+forward test (forward slots 2–10 in `ROADMAP.md`). The explorer's screen says
+which strategies have earned that test; nothing more.
+
+**What it can trade.** Any mix of legs, written one token per leg:
+
+| Notation | Structure |
+|---|---|
+| `FUT+` / `FUT-` | long or short near-month future |
+| `FUT+ CE-@ATM+2` | covered call: long future, short weekly call two strikes up |
+| `CE+@ATM FUT-` | synthetic put: short future, long at-the-money call (defined risk) |
+| `FUT+ PE+@ATM` | protective put (defined risk) |
+| `CE+@ATM CE-@ATM+2` | bull call spread |
+| `CE-@ATM PE-@ATM` | short straddle |
+| `CE-@EM+0.5 PE-@EM-0.5 CE+@EM+1.0 PE+@EM-1.0` | iron condor, strikes set by the at-the-money straddle |
+| `CE-@PREM:20` | the call whose premium is the highest at or below 20 |
+| `PE+2@ATM/next_weekly` | two lots of next week's at-the-money put |
+
+`python run_trader.py fno explore library` lists the templates (futures
+breakout, covered call and put, synthetic put, protective put, debit and credit
+spreads, long options, short straddle and strangle, iron fly and condor, long
+straddle, ratio spread). `config/fno_strategies.example.json` picks the ones to
+run and sets each one's budget. To change it, copy it to
+`config/fno_strategies.json`, which is gitignored and read first. Editing a
+tracked file would leave uncommitted changes, and V's runner refuses to start
+while there are any. A strategy can use one legs string for every signal,
+or one per direction: `{"long": "...", "short": "..."}`.
+
+**Triggers.**
+
+| Trigger | Fires when |
+|---|---|
+| `at` | its window opens |
+| `orb` | the index breaks the 09:15 to `range_end` range by `buffer_pct`: long above it, short below it |
+| `move` | the index is `pct`% from the open: long or short |
+| `range` | the index is still within `pct`% of the open |
+
+Triggers read only readings the runner has already taken. The open and the
+opening range come from the exchange's own day open, high and low, which
+Kite sends with each index reading (a reading's figures are kept only if
+taken after 09:15 and the price sits inside them). So a runner started late
+still knows the open, and still knows the opening range if it took a reading
+within 3 minutes of `range_end`. On a feed without those figures, the open
+is the first reading if it was taken by 09:17, and the range is the readings
+themselves. Otherwise the trigger does not fire.
+
+**How a trade is decided, every pass (one a minute).**
+
+1. **Contracts by rule** from the day's contract master. Lot sizes, strikes and
+   expiries come from the feed; none is hard-coded.
+2. **Quote checks on every leg.**
+   - Two-sided.
+   - Spread within ₹1 or 10% of the mid; 0.02% for a future.
+   - Exchange timestamp under 60 s old.
+   - Top-of-book quantity at least the order's size.
+3. **Risk, fixed in rupees at entry.**
+   - **Defined structures:** the worst loss over a ±20% index band, plus
+     round-trip costs. The structure's value cannot leave its payoff's range,
+     so this bounds the loss at any moment, not just at expiry.
+   - **Undefined ones** (futures, short straddles, covered calls, ratio
+     spreads): the stop × 1.5, plus costs. The stop is checked once a minute
+     and can be overrun. These strategies must have a stop, set in points,
+     rupees or a multiple of the credit.
+4. **Size.** The most units the strategy's budget allows, capped by the freeze
+   quantity.
+5. **Margin** must fit in 80% of capital. The broker's own figure for the order
+   (Zerodha's basket margin, read-only) decides when it is available; otherwise an
+   estimate does. The estimate for a spread is only its worst loss, far below what
+   a broker blocks, so until 10 Nov 2026, when the estimate alone decided, the
+   paper book used up to 94% of its capital by Zerodha's figures.
+6. **Fill at the touch:** buy at the ask, sell at the bid.
+7. **Mark and exit every pass, at the touch, net of every cost.** A position
+   closes on the first of:
+   - its stop;
+   - its trailing lock;
+   - its target;
+   - its exit time (15:15 at the latest);
+   - the day's loss limit (₹15,000 by default), which also halts the day;
+   - the kill switch.
+
+**What happens when there is no price.** Feeds fail, so two rules decide what
+the record says.
+
+- **No quote at 15:29.** A position with no quote by the last call is booked at
+  its last mark if that mark is under 15 minutes old. Otherwise it is booked at
+  −1R.
+- **Left open overnight.** A position the runner did not square off is closed
+  the same way on the next pass.
+
+Both are flagged and counted separately in the report.
+
+**The screen.**
+
+- **The test.** Each strategy's R (net ÷ risk), in trade order, is fed to the
+  same anytime-valid betting statistic V uses.
+- **The threshold** is m / 0.05 for m strategies in the configuration. This is
+  a Bonferroni split of e-values, valid however long the explorer runs.
+- **When it resets.** Changing the configuration starts a new generation, and
+  the screen restarts.
+- **When it is void.** A trade below −2R voids a strategy's screen.
+- **What a pass means.** A strategy that passes is a candidate for registration,
+  not a result.
+
+**Commands**
+
+| Command | Does |
+|---|---|
+| `fno explore library` | The templates, their legs, triggers and exits |
+| `fno explore payoff "FUT+ CE-@ATM+2" [--feed kite]` | One structure: its legs at the touch, credit or debit, defined or not, worst loss on the band, costs, break-evens, margin estimate, and its P&L for index moves of ±0.5–5%. Mock prices unless a feed is named |
+| `fno explore demo [--days 5]` | SYNTHETIC wiring check in a temp directory |
+| `fno explore init --feed kite` | Start the explorer's paper book, once |
+| `fno explore run --feed kite` | From 09:10: one pass a minute until 15:30, then the scoreboard |
+| `fno explore pass --feed kite` | One pass now |
+| `fno explore report [--json F]` | Per strategy: trades, win rate, mean R, net ₹, drawdown, costs, exits by reason, the screen |
+| `fno explore status` / `verify` | The current book; the journal's hash chain |
+
+**What it needs.** The same data plan and machine as V, on from 09:10 to 15:30.
+The explorer and V can run side by side: they share no state. Each morning:
+
+```bash
+cd ~/STOCK-MARKET-ANALYSIS && set -a && . ~/.config/nse-trader/env && set +a
+eval "$(.venv/bin/python tools/kite_session.py --eval)"   # today's login, by hand
+deploy/fno_day.sh        # both runners in tmux, logging to logs/
+```
+
+**The option-buying book.** A third paper book, off by default: `fno explore run --small` runs it
+beside the explorer, in `state/fno_small`, from `config/fno_small.example.json` (copy it to
+`config/fno_small.json` to change it). Its strategies only buy one option lot: a cheap
+out-of-the-money option on the opening-range breakout, the same on a 0.5% move by 14:30, and
+the at-the-money option with a tight stop. Its replay on 2021–2024 lost (`research/INTRADAY_LOG.md`
+step 21). The evening report shows it in its own section when it has run.
+
+**What to expect.**
+
+- **Costs are large.** At the 2026 fee card, a one-lot NIFTY futures round trip
+  costs about ₹1,000–1,250, most of it STT. A 40-point stop on one lot is a
+  ₹2,600 loss before costs.
+- **A ₹5,00,000 paper book holds only a couple of positions at once.** A short
+  straddle or a future needs roughly ₹2 lakh of margin.
+- **Some strategies will skip often**, for budget, margin, spread or depth.
+  Each skip is journaled once a day with its reason.
+
 ## Known gaps — read before trusting it
 
-- **The strategy is unvalidated.** Gate 1 has not been run on real data. Paper
-  trading can start now because it costs nothing, but its results are not
-  validation until Gate 1 passes.
+- **No strategy is validated.** Gate 1 ran on real data on 17 Oct 2026 and the
+  equity score failed it; V-H failed on 31 Oct; no intraday strategy has passed a
+  registered test. Paper trading costs nothing, but its results are not
+  validation. Today's state: `STATUS.md`.
 - **Gaps through the stop.** Sizing caps the loss *at the stop*. A gap through it
   loses more, and a gap through the stop-limit leaves the position open until the
   emergency exit fills.
@@ -463,6 +616,11 @@ state/                       gitignored — account data never goes to git
     master/YYYY-MM-DD.json   the day's first contract master, used by every pass that day
     KILL                     F&O-only kill switch
     runner.lock              one pass at a time
+  fno_explore/               the intraday explorer's paper book (always under the repo's state/)
+    journal.jsonl            hash-chained decisions: config generations, entries, exits, skips, halts
+    ticks/YYYY-MM-DD.jsonl   each pass's index reading and open marks (observations, not the record)
+    master/YYYY-MM-DD.json   the day's contract master, options and futures
+    book.json  KILL  runner.lock
 ```
 
 ## Sources for the regulatory and broker notes

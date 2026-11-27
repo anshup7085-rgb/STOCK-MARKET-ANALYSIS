@@ -1,0 +1,251 @@
+#!/usr/bin/env python3
+"""
+Is Dhan's expired-options data good enough to test on? A check before any big download.
+
+    PYTHONPATH=. python tools/dhan_check.py
+
+It asks for your Dhan access token (hidden as you paste; never saved, never printed), then fetches
+Dhan's minute data for the NIFTY week that expired on 3 Nov 2026 and compares it, minute by minute,
+with the same options saved from Zerodha by tools/save_expiring_options.py
+(state/option_minutes/2026-11-03/). It prints only counts and match rates, never a price.
+
+Dhan's endpoint, as its v2 docs (the export of 27 Oct 2026) give it: POST /v2/charts/rollingoption
+with an `access-token` header; securityId 13 for NIFTY; expiryCode 1 = near, 2 = next, 3 = far;
+toDate excluded; 5 data requests a second. The docs say both "one day" and "30 days" per call, so it
+asks one session at a time.
+Raw replies are kept in state/dhan/probe/ (they hold market data only, no credentials).
+"""
+
+from __future__ import annotations
+
+import csv
+import getpass
+import gzip
+import json
+import re
+import sys
+import time as _time
+import urllib.error
+import urllib.request
+from datetime import datetime, timedelta
+from pathlib import Path
+
+from market.config import IST
+
+REPO = Path(__file__).resolve().parents[1]
+OURS = REPO / "state" / "option_minutes" / "2026-11-03"
+OUT = REPO / "state" / "dhan" / "probe"
+URL = "https://api.dhan.co/v2/charts/rollingoption"
+NIFTY_ID = 13                         # NIFTY 50 in Dhan's instrument list (IDX_I)
+SESSIONS = ("2026-10-27", "2026-10-28", "2026-10-29", "2026-10-30", "2026-11-02", "2026-11-03")
+GAP_S = 0.3                           # under Dhan's 5 data requests a second
+FIELDS = ["open", "high", "low", "close", "volume", "oi", "iv", "strike", "spot"]
+SYMBOL = re.compile(r"^NIFTY\d{2}(?:[A-Z]{3}|[1-9OND]\d{2})(\d+)(CE|PE)\.csv\.gz$")
+
+
+def ask(prompt: str) -> str:
+    v = getpass.getpass(prompt).strip()
+    if not v:
+        raise SystemExit("nothing entered; stopping")
+    return v
+
+
+def call(token: str, body: dict) -> tuple[int, dict | str]:
+    for attempt in range(4):
+        _time.sleep(GAP_S)
+        req = urllib.request.Request(URL, data=json.dumps(body).encode(), method="POST",
+                                     headers={"Content-Type": "application/json", "Accept": "application/json",
+                                              "access-token": token})
+        try:
+            with urllib.request.urlopen(req, timeout=60) as r:
+                return r.status, json.loads(r.read().decode())
+        except urllib.error.HTTPError as exc:
+            text = exc.read().decode(errors="replace")[:300]
+            if exc.code == 429 or "RATE_LIMIT" in text.upper():
+                _time.sleep(2 ** attempt)                      # Dhan: back off at least a second
+                continue
+            return exc.code, text
+        except Exception as exc:                                # noqa: BLE001 - a check: report anything
+            return 0, f"{type(exc).__name__}: {str(exc)[:200]}"
+    return 429, "rate limited four times"
+
+
+def body(code: int, strike: str, right: str, day: str) -> dict:
+    nxt = (datetime.fromisoformat(day) + timedelta(days=1)).date().isoformat()
+    return {"exchangeSegment": "NSE_FNO", "interval": "1", "securityId": NIFTY_ID, "instrument": "OPTIDX",
+            "expiryFlag": "WEEK", "expiryCode": code, "strike": strike, "drvOptionType": right,
+            "requiredData": FIELDS, "fromDate": day, "toDate": nxt}
+
+
+def fetch(token: str, code: int, strike: str, right: str, days=SESSIONS) -> tuple[dict | None, list[str]]:
+    """One series over the week, a session per call, joined. (series or None, problems)."""
+    joined: dict[str, list] = {}
+    problems = []
+    for day in days:
+        status, reply = call(token, body(code, strike, right, day))
+        s = series(reply, right) if status == 200 and isinstance(reply, dict) else None
+        if s is None:
+            problems.append(f"{day}: HTTP {status} {str(reply)[:80] if status != 200 else 'no data'}")
+            continue
+        (OUT / f"code{code}_{strike}_{right}_{day}.json").write_text(json.dumps(reply))
+        for k, v in s.items():
+            if isinstance(v, list):
+                joined.setdefault(k, []).extend(v)
+    if not joined.get("timestamp"):
+        return None, problems
+    # Dhan returned more than the day asked for (its toDate behaved as inclusive): keep each minute once
+    keep, seen = [], set()
+    for i, ts in enumerate(joined["timestamp"]):
+        if ts not in seen:
+            seen.add(ts)
+            keep.append(i)
+    return {k: [v[i] for i in keep] for k, v in joined.items() if len(v) == len(joined["timestamp"])}, problems
+
+
+def series(reply: dict, right: str) -> dict | None:
+    data = reply.get("data") if isinstance(reply, dict) else None
+    if not isinstance(data, dict):
+        return None
+    s = data.get("ce" if right == "CALL" else "pe")
+    return s if isinstance(s, dict) and s.get("timestamp") else None
+
+
+def ours() -> dict[tuple[float, str], dict[int, tuple[float, float, float, float]]]:
+    """(strike, CE/PE) -> {epoch second: (close, oi, high, low)} from the Zerodha files."""
+    out = {}
+    for p in sorted(OURS.glob("*.csv.gz")):
+        m = SYMBOL.match(p.name)
+        if not m:
+            continue
+        rows = {}
+        for r in csv.DictReader(gzip.open(p, "rt")):
+            ts = int(datetime.fromisoformat(r["time"]).timestamp())
+            rows[ts] = (float(r["close"]), float(r["oi"]) if r.get("oi") else 0.0, float(r["high"]), float(r["low"]))
+        out[(float(m.group(1)), m.group(2))] = rows
+    return out
+
+
+FIRST_DAY = "2026-10-28"               # 27 Oct was itself an expiry: that day "near" meant the 27 Oct contracts
+LAST_DAY = "2026-11-03"                # the 3 Nov contracts' last session; later minutes are the next expiry's
+SHIFTS = (-120, -60, 0, 60, 120)
+
+
+def compare(s: dict, right: str, mine: dict, shift: int) -> dict:
+    """Dhan's minutes against ours, inside market hours (09:15 to 15:29) of the 3 Nov contracts' life."""
+    kind = "CE" if right == "CALL" else "PE"
+    n = found = tick = pct = oi_same = after_close = later = inside = 0
+    diffs: list[float] = []
+    days: dict[str, int] = {}
+    for ts, k, c, oi in zip(s["timestamp"], s.get("strike") or [], s.get("close") or [], s.get("oi") or []):
+        t = int(ts) + shift
+        when = datetime.fromtimestamp(t, IST)
+        day = when.date().isoformat()
+        if day > LAST_DAY or day < FIRST_DAY:
+            later += 1
+            continue
+        if not ("09:15" <= when.strftime("%H:%M") <= "15:29"):
+            after_close += 1
+            continue
+        n += 1
+        days[day] = days.get(day, 0) + 1
+        row = mine.get((float(k), kind), {}).get(t)
+        if row is None:
+            continue
+        found += 1
+        diffs.append(float(c) - row[0])
+        inside += row[3] - 1e-9 <= float(c) <= row[2] + 1e-9
+        diff = abs(float(c) - row[0])
+        tick += diff < 0.005                                    # exactly equal (prices are on a 0.05 tick)
+        pct += diff <= 0.01 * max(row[0], 0.05) + 1e-9
+        oi_same += abs(float(oi) - row[1]) < 1
+    return {"points": n, "found_in_ours": found, "close_exact": tick, "close_within_1pct": pct,
+            "oi_equal": oi_same, "minutes_per_day": days, "after_close": after_close, "other_expiry_days": later,
+            "inside_range": inside, "diffs": diffs}
+
+
+def spread(diffs: list[float]) -> str:
+    """How far Dhan's close sits from Zerodha's, in index points: typical, near-worst, and any lean."""
+    if not diffs:
+        return "no minutes"
+    a = sorted(abs(d) for d in diffs)
+    med, p95 = a[len(a) // 2], a[int(0.95 * (len(a) - 1))]
+    lean = sum(diffs) / len(diffs)
+    up = sum(d > 0 for d in diffs) / len(diffs)
+    return (f"difference: typical {med:.2f} pts, 95% within {p95:.2f} pts; average lean {lean:+.3f} pts "
+            f"(Dhan higher on {up:.0%} of minutes)")
+
+
+def best_shift(s: dict, right: str, mine: dict) -> tuple[int, dict]:
+    """The time alignment with the most closes and open interests exactly equal: one minute off still
+    finds every minute, so the count of minutes found cannot choose it."""
+    results = {sh: compare(s, right, mine, sh) for sh in SHIFTS}
+    sh = max(results, key=lambda x: (results[x]["close_exact"] + results[x]["oi_equal"], -abs(x)))
+    return sh, results[sh]
+
+
+def main() -> int:
+    if not OURS.exists():
+        print(f"no Zerodha copy of the 3 Nov week at {OURS}: nothing to compare against")
+        return 2
+    mine = ours()
+    print(f"our Zerodha copy: {len(mine)} options of the 3 Nov expiry")
+    token = ask("Dhan access token (hidden; paste once, then Enter): ")
+    OUT.mkdir(parents=True, exist_ok=True)
+
+    print("\n1. which expiry code is the 3 Nov week (ATM call, 2 and 3 Nov)")
+    best = None
+    for code in (1, 2, 3):
+        s, problems = fetch(token, code, "ATM", "CALL", ("2026-11-02", "2026-11-03"))
+        if s is None:
+            print(f"  code {code}: no data ({'; '.join(problems)[:200]})")
+            continue
+        ts = s["timestamp"]
+        first, last = (datetime.fromtimestamp(int(x), IST) for x in (min(ts), max(ts)))
+        strikes = [float(k) for k in s.get("strike") or []]
+        shift, r = best_shift(s, "CALL", mine)
+        print(f"  code {code}: {len(ts)} minutes, {first:%d %b %H:%M} to {last:%d %b %H:%M} IST, strikes "
+              f"{min(strikes):g}-{max(strikes):g}" if strikes else f"  code {code}: {len(ts)} minutes, no strike field")
+        print(f"     matched to our copy: {r['found_in_ours']} of {r['points']} (time shift {shift}s); "
+              f"close exactly equal {r['close_exact']}, within 1% {r['close_within_1pct']}, OI equal {r['oi_equal']}")
+        if r["close_exact"] and (best is None or r["close_exact"] > best[1]):
+            best = (code, r["close_exact"], shift)
+    if best is None:
+        print("\nno expiry code matched our 3 Nov week. Send this output to Claude; do not download anything yet.")
+        return 1
+
+    code, _, shift = best
+    print(f"\n2. the 3 Nov week, expiry code {code}, Dhan's minutes shifted {shift:+d}s to line up with Zerodha's: "
+          f"calls and puts from ATM-10 to ATM+10, sampled")
+    total = {"points": 0, "found_in_ours": 0, "close_exact": 0, "close_within_1pct": 0, "oi_equal": 0,
+             "inside_range": 0, "diffs": []}
+    for strike in ("ATM-10", "ATM-2", "ATM-1", "ATM", "ATM+1", "ATM+2", "ATM+10"):
+        for right in ("CALL", "PUT"):
+            s, problems = fetch(token, code, strike, right)
+            if s is None:
+                print(f"  {strike:>6} {right}: no data ({'; '.join(problems)[:160]})")
+                continue
+            if problems:
+                print(f"  {strike:>6} {right}: missing sessions: {'; '.join(problems)[:160]}")
+            r = compare(s, right, mine, shift)
+            own, _ = best_shift(s, right, mine)
+            for k in total:
+                total[k] += r[k]
+            full_days = sum(1 for v in r["minutes_per_day"].values() if v >= 370)
+            print(f"  {strike:>6} {right}: {r['points']} minutes on {len(r['minutes_per_day'])} days ({full_days} full); "
+                  f"in our copy {r['found_in_ours']}; close exactly equal {r['close_exact']}, "
+                  f"within 1% {r['close_within_1pct']}; inside Zerodha's high-low {r['inside_range']}; "
+                  f"OI equal {r['oi_equal']}" + (f"; best alone at {own:+d}s" if own != shift else ""))
+            print(f"         {spread(r['diffs'])}")
+    f = max(total["found_in_ours"], 1)
+    print(f"\nOVERALL: {total['points']} Dhan minutes; {total['found_in_ours']} found in our Zerodha copy "
+          f"({total['found_in_ours'] / max(total['points'], 1):.1%}); of those, close exactly equal "
+          f"{total['close_exact'] / f:.1%}, within 1% {total['close_within_1pct'] / f:.1%}, "
+          f"inside Zerodha's high-low for that minute {total['inside_range'] / f:.1%}, "
+          f"OI equal {total['oi_equal'] / f:.1%}")
+    print(f"  {spread(total['diffs'])}")
+    print("Send this whole output to Claude. Your token was not saved anywhere.")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

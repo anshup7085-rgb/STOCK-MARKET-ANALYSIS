@@ -107,10 +107,21 @@ if bad="$(forbidden_in "$ENV_FILE")"; then
   exit 1
 fi
 
+# 3b. `morning` (the day's login and both F&O paper runners) and `evening` (the day's report)
+MORNING="alias morning='$REPO/deploy/morning.sh'"
+EVENING="alias evening='$REPO/deploy/evening.sh'"
+for line in "$MORNING" "$EVENING"; do
+  if ! grep -qxF "$line" "$HOME/.bashrc" 2>/dev/null; then
+    echo "$line" >>"$HOME/.bashrc"
+    say "added: $line (it works in new terminals)"
+  fi
+done
+
 # 4. The suites, on this machine's Python and packages, in a clean environment
 #    so a risk override in your shell cannot fail (or pass) them
 say "running the test suites"
-for t in tests/test_offline.py tests/test_trading.py tests/test_research.py; do
+for t in tests/test_offline.py tests/test_trading.py tests/test_research.py tests/test_round2.py \
+         tests/test_fno.py tests/test_fno_explore.py tests/test_context.py tests/test_option_save.py tests/test_vh.py tests/test_scripts.py tests/test_day_report.py tests/test_dhan_check.py tests/test_dhan_download.py tests/test_dhan_data.py tests/test_explore_replay.py tests/test_explore_expiry.py tests/test_index_minutes.py tests/test_explore_vrp.py tests/test_dhan_download_more.py tests/test_explore_expiry_more.py tests/test_brain.py tests/test_trace_expiry_more.py tests/test_power_expiry.py tests/test_dashboard.py tests/test_crypto.py tests/test_status.py tests/test_crypto_rules.py tests/test_crypto_paper.py tests/test_perps_lab.py tests/test_perps_maker.py tests/test_themes.py tests/test_human_desk.py; do
   printf '    %-26s ' "$t"
   if ! out="$(cd "$REPO" && env -i HOME="$HOME" PATH=/usr/local/bin:/usr/bin:/bin PYTHONPATH=. .venv/bin/python "$t" 2>&1)"; then
     printf 'FAILED\n'

@@ -1,7 +1,7 @@
 {
-  "_comment": "NSE equity-segment (Capital Market) trading holidays for 2026. Weekend dates need not be listed. Taken from NSE circular NSE/CMTR/71775 (Ref. 172/2025, 12 Dec 2025, 'Trading Holidays for Calendar Year 2026', 15 weekday holidays) and NSE/CMTR/72260 (12 Jan 2026, which added 2026-01-15). The circulars were read through search-index extracts of the NSE PDFs, checked by two independent searches on 2026-10-19, but not opened directly: this environment cannot reach nseindia.com. Open nsearchives.nseindia.com/content/circulars/CMTR71775.pdf, check the table, then set verified_on. Muhurat trading 2026: Sunday 2026-11-08, timings to be notified by a later circular (a weekend session; the system does not trade it). The 2027 list was not yet published on 2026-10-19.",
-  "source": "NSE circulars NSE/CMTR/71775 (2025-12-12) and NSE/CMTR/72260 (2026-01-12), via search-index extracts; not opened directly",
-  "verified_on": null,
+  "_comment": "NSE equity-segment (Capital Market) trading holidays for 2026. Weekend dates need not be listed. From NSE circular NSE/CMTR/71775 (Ref. 172/2025, 12 Dec 2025, 'Trading Holidays for Calendar Year 2026', 15 weekday holidays) and NSE/CMTR/72260 (Ref. 07/2026, 12 Jan 2026, which added 2026-01-15). First entered from search-index extracts (2026-10-19); on 2026-11-27 both PDFs were opened directly from nsearchives.nseindia.com and every date and name matched. Muhurat trading 2026: Sunday 2026-11-08 (a weekend session; the system does not trade it). The 2027 list was not yet published on 2026-11-27.",
+  "source": "NSE circulars NSE/CMTR/71775 (2025-12-12) and NSE/CMTR/72260 (2026-01-12), PDFs read directly on 2026-11-27",
+  "verified_on": "2026-11-27",
   "holidays": {
     "2026-01-15": "Municipal Corporation Election in Maharashtra (added by NSE/CMTR/72260)",
     "2026-01-26": "Republic Day",

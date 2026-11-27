@@ -21,6 +21,9 @@ trading/live.py. Read TRADING.md before using `--mode live`.
     python run_trader.py fno init  --feed kite --equity 500000
     python run_trader.py fno run   --feed kite            # each trading morning, after the token
     python run_trader.py fno status | evaluate | verify
+    # the intraday multi-leg explorer (many strategies, futures + options, paper) — trading/fno/explore_cli.py
+    python run_trader.py fno explore library | payoff "FUT+ CE-@ATM+2" | demo
+    python run_trader.py fno explore run --feed kite      # each trading day from 09:10
 
     # live — see TRADING.md for the daily routine
     python run_trader.py cycle   --mode live --provider kite  --broker kite  [--override-gates "..."]
