@@ -548,30 +548,41 @@
     x.clearRect(0, 0, w, h);
     if (!data.length) { x.fillStyle = MU; x.font = "11px ui-monospace,monospace"; x.fillText("No NSE history on this server yet.", 10, 20); return; }
     if ($("rot-asof")) $("rot-asof").textContent = "week of " + data[0].asof;
-    var xs = [], ys = [];
-    data.forEach(function (d) { d.trail.forEach(function (p) { xs.push(p[0]); ys.push(p[1]); }); });
-    var sx = Math.max(1.5, Math.max.apply(null, xs.map(function (v) { return Math.abs(v - 100); }))) * 1.1;
-    var sy = Math.max(1.5, Math.max.apply(null, ys.map(function (v) { return Math.abs(v - 100); }))) * 1.1;
+    var heads = data.map(function (d) { return d.trail[d.trail.length - 1]; });
+    var sx = Math.max(0.8, Math.max.apply(null, heads.map(function (v) { return Math.abs(v[0] - 100); }))) * 1.25;
+    var sy = Math.max(0.8, Math.max.apply(null, heads.map(function (v) { return Math.abs(v[1] - 100); }))) * 1.25;
     function X(v) { return w / 2 + (v - 100) / sx * (w / 2 - 6); }
     function Yr(v) { return h / 2 - (v - 100) / sy * (h / 2 - 6); }
-    [["rgba(53,211,154,.07)", w / 2, 0, "LEADING", w - 6, 12, "right"], ["rgba(255,201,60,.07)", w / 2, h / 2, "WEAKENING", w - 6, h - 6, "right"],
-     ["rgba(255,77,94,.07)", 0, h / 2, "LAGGING", 6, h - 6, "left"], ["rgba(77,163,255,.07)", 0, 0, "IMPROVING", 6, 12, "left"]].forEach(function (q) {
-      x.fillStyle = q[0]; x.fillRect(q[1], q[2], w / 2, h / 2);
-      x.fillStyle = MU; x.font = "700 9px ui-monospace,monospace"; x.textAlign = q[6]; x.fillText(q[3], q[4], q[5]);
+    function quad(p) { return p[0] >= 100 ? (p[1] >= 100 ? 0 : 1) : (p[1] >= 100 ? 3 : 2); }
+    var COL = ["53,211,154", "255,201,60", "255,77,94", "77,163,255"], NAMES = ["LEADING", "WEAKENING", "LAGGING", "IMPROVING"];
+    [[0, w / 2, 0, w - 6, 12, "right"], [1, w / 2, h / 2, w - 6, h - 6, "right"], [2, 0, h / 2, 6, h - 6, "left"], [3, 0, 0, 6, 12, "left"]].forEach(function (q) {
+      x.fillStyle = "rgba(" + COL[q[0]] + ",.07)"; x.fillRect(q[1], q[2], w / 2, h / 2);
+      x.fillStyle = MU; x.font = "700 9px ui-monospace,monospace"; x.textAlign = q[5]; x.fillText(NAMES[q[0]], q[3], q[4]);
     });
     x.strokeStyle = "#3a1616"; x.beginPath(); x.moveTo(w / 2, 0); x.lineTo(w / 2, h); x.moveTo(0, h / 2); x.lineTo(w, h / 2); x.stroke();
     var grow = Math.min(1, (Date.now() - rotStart) / 2500);
-    data.forEach(function (d) {
-      var t = d.trail, n = Math.max(2, Math.ceil(t.length * grow)), last = t[n - 1], lx = X(last[0]), ly = Yr(last[1]);
-      var col = last[0] >= 100 ? (last[1] >= 100 ? "53,211,154" : "255,201,60") : (last[1] >= 100 ? "77,163,255" : "255,77,94");
+    var far = data.map(function (d, i) { var p = heads[i]; return [Math.hypot((p[0] - 100) / sx, (p[1] - 100) / sy), i]; })
+      .sort(function (a, b) { return b[0] - a[0]; }).slice(0, 10).map(function (a) { return a[1]; });
+    x.save(); x.beginPath(); x.rect(0, 0, w, h); x.clip();
+    data.forEach(function (d, k) {
+      var t = d.trail, n = Math.max(2, Math.ceil(t.length * grow)), last = t[n - 1], lx = X(last[0]), ly = Yr(last[1]), col = COL[quad(last)];
       for (var i = 1; i < n; i++) {
-        x.strokeStyle = "rgba(" + col + "," + (0.15 + 0.6 * i / t.length).toFixed(2) + ")"; x.lineWidth = 1.2;
+        x.strokeStyle = "rgba(" + col + "," + (0.12 + 0.55 * i / t.length).toFixed(2) + ")"; x.lineWidth = 1.2;
         x.beginPath(); x.moveTo(X(t[i - 1][0]), Yr(t[i - 1][1])); x.lineTo(X(t[i][0]), Yr(t[i][1])); x.stroke();
       }
-      x.fillStyle = "rgb(" + col + ")"; x.beginPath(); x.arc(lx, ly, 3, 0, Math.PI * 2); x.fill();
-      x.fillStyle = "rgba(236,220,207,.85)"; x.font = "9px ui-monospace,monospace"; x.textAlign = lx > w * .75 ? "right" : "left";
-      x.fillText(d.label, lx + (lx > w * .75 ? -5 : 5), ly - 4);
+      x.fillStyle = "rgb(" + col + ")"; x.beginPath(); x.arc(lx, ly, 3.2, 0, Math.PI * 2); x.fill();
+      if (far.indexOf(k) >= 0) {
+        x.fillStyle = "rgba(236,220,207,.9)"; x.font = "9px ui-monospace,monospace"; x.textAlign = lx > w * .7 ? "right" : "left";
+        x.fillText(d.label, lx + (lx > w * .7 ? -5 : 5), ly - 4);
+      }
     });
+    x.restore();
+    var lists = [[], [], [], []];
+    data.forEach(function (d, i) { lists[quad(heads[i])].push(d.label); });
+    var el = $("rot-list");
+    if (el) el.innerHTML = [0, 3, 1, 2].map(function (q) {
+      return '<div><b style="color:rgb(' + COL[q] + ')">' + NAMES[q] + "</b> " + (lists[q].length ? lists[q].map(esc).join(", ") : "none") + "</div>";
+    }).join("");
   }
 
   // ---------------------------------------------------------------- the world market clock

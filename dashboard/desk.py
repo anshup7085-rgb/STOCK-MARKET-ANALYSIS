@@ -132,7 +132,7 @@ PANELS = """
 <div id=desk-chart></div><div class=legend><span class=y>— Kalman level</span> · candles live from Binance</div></div>
 <div class=panel id=p-kalman><h3>State-space estimator · Kalman on price <span class=r id=kgain></span></h3>
 <canvas id=innov height=110></canvas><div class=legend>bars: innovations (price minus the filter's forecast)</div></div>
-<div class=panel id=p-rot><h3>Sector rotation map · NSE <span class=r id=rot-asof></span></h3><canvas id=rot height=320></canvas>
+<div class=panel id=p-rot><h3>Sector rotation map · NSE <span class=r id=rot-asof></span></h3><canvas id=rot height=320></canvas><div id=rot-list class=legend></div>
 <div class=legend>each sector's strength against NIFTY 50 (across) and its change (up), weekly, with an 8-week trail.
 Our own construction (dashboard/themes.py); a description, not a signal</div></div>
 <div class=panel id=p-brain><h3>NIFTY brain · next session</h3><div id=brainbox></div></div>
