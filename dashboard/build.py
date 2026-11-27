@@ -326,7 +326,7 @@ h1{font-size:15px;letter-spacing:.12em;margin:0 auto 0 0;font-weight:700}h1 span
 .chip{font:600 11px var(--mono);padding:3px 8px;border-radius:999px;border:1px solid var(--line);color:var(--muted);letter-spacing:.04em}
 .chip.live{color:var(--up);border-color:rgba(22,199,132,.45)}.chip.live:before{content:"";display:inline-block;width:7px;height:7px;
 border-radius:50%;background:var(--up);margin-right:6px;animation:pulse 1.4s infinite}
-.chip.wait{color:#f5a623;border-color:rgba(245,166,35,.4)}.chip.off{color:var(--down);border-color:rgba(234,57,67,.45)}
+.deskl{color:#ff9a3c;border-color:rgba(255,154,60,.45);text-decoration:none}.chip.wait{color:#f5a623;border-color:rgba(245,166,35,.4)}.chip.off{color:var(--down);border-color:rgba(234,57,67,.45)}
 @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(22,199,132,.7)}70%{box-shadow:0 0 0 7px rgba(22,199,132,0)}100%{box-shadow:0 0 0 0 rgba(22,199,132,0)}}
 main{max-width:820px;margin:auto;padding:4px 12px 40px}
 section{background:linear-gradient(180deg,var(--card2),var(--card));border:1px solid var(--line);border-radius:12px;padding:12px 14px;margin:12px 0}
@@ -378,7 +378,7 @@ def build(root: Path = ROOT) -> str:
             "<meta name=viewport content='width=device-width,initial-scale=1'><meta name=theme-color content='#070a10'>"
             f"<title>Market Lab</title><style>{CSS}</style></head><body><header><div class=bar>"
             "<h1>MARKET<span>LAB</span></h1><span id=live-status class='chip wait'>connecting</span>"
-            "<span class=chip>PAPER ONLY</span><span id=clock></span></div></header>"
+            "<span class=chip>PAPER ONLY</span><a class='chip deskl' href=desk.html>DESK ▸</a><span id=clock></span></div></header>"
             f"<main>{''.join(body)}<p class=muted>Built {datetime.now():%d %b %Y, %H:%M} from the server's records. "
             "Read-only: no real money is traded. Charts by TradingView Lightweight Charts.</p></main>"
             f"<script id=data type=application/json>{data}</script><script src=lwc.js></script><script>{script}</script>"
@@ -390,10 +390,13 @@ def main() -> int:
     tmp = OUT.with_suffix(".tmp")
     tmp.write_text(build())
     os.replace(tmp, OUT)
+    from dashboard import desk
+    tmp.write_text(desk.build(ROOT))
+    os.replace(tmp, OUT.parent / "desk.html")
     lib = Path(__file__).resolve().parent / "vendor" / "lightweight-charts-4.2.0.js"
     if lib.exists():
         shutil.copyfile(lib, OUT.parent / "lwc.js")
-    print(f"dashboard built: {OUT}")
+    print(f"dashboard built: {OUT} and desk.html")
     return 0
 
 

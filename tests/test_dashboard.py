@@ -82,6 +82,28 @@ def test_a_label_cannot_close_the_data_script():
     assert "</script>" not in payload and json.loads(payload)["x"].startswith("</script>")
 
 
+def test_the_desk_page_shows_only_real_records():
+    import json
+    import re
+    from dashboard import desk
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        empty = desk.build(root)
+        assert "MARKET LAB // DESK" in empty and "wss://stream.binance.com:443" in empty
+        j = Journal(root / "state" / "brain" / "journal.jsonl", "brain")
+        j.append("BRAIN_FORECAST", asof="2026-11-26", after="2026-11-26", question="big", p=0.61, base=0.49)
+        c = Journal(root / "state" / "crypto" / "paper" / "journal.jsonl", "crypto-paper")
+        acct = {"in": True, "free_value": 100800.0, "india_value": 100500.0, "spec_value": 100600.0, "action": "BUY", "price": 60458.0}
+        c.append("CP_DAY", asof="2026-11-25", day="2026-11-25", accounts={"hold BTCUSDT": acct}, caught_up=False)
+        page = desk.build(root)
+    data = json.loads(re.search(r"<script id=data type=application/json>(.*?)</script>", page, re.S).group(1))
+    assert data["brain"]["big"] == {"p": 0.61, "base": 0.49} and data["brain"]["after"] == "2026-11-26"
+    assert data["trades"][0]["what"] == "BUY BTC" and "60,458.00" in data["trades"][0]["note"]
+    assert data["paper_total"]["now"] == 100800.0 and data["paper_total"]["holding"] == 1
+    assert [r["verdict"] for r in data["scoreboard"]][:3] == ["SKILL", "LEAD", "PAPER"]
+    assert "Every number is real" in page
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):
