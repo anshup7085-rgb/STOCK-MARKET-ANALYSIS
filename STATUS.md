@@ -30,8 +30,9 @@ document is out of date.
 
 Agreed with the holder: several markets (India and crypto first, then the US and others), many strategies on
 paper, a news lab, the holder's own daily view scored beside the machine's, and one private dashboard.
-The plan: `research/BLUEPRINT.md`. Built so far: the dashboard's first version (`dashboard/build.py`,
-served by `deploy/dashboard.sh` on the holder's private Tailscale network only).
+The plan: `research/BLUEPRINT.md`. Built so far: the dashboard (`dashboard/build.py`, served by
+`deploy/dashboard.sh` on the holder's private Tailscale network only), with a themes section from 27 Nov (sectors and themes over 1, 3 and 12
+months, `dashboard/themes.py`).
 
 ## The market brain (from 12 Nov 2026)
 
@@ -60,7 +61,7 @@ Nothing has a measured edge. The correct trading output today is **NO TRADE**.
 1. **The expiry-day straddle, followed forward on paper** (Tuesdays, `research/INTRADAY_LOG.md` step 34).
 2. **Momentum and the opening gap** on ten years of NIFTY minutes (steps 9 and 15): they need one `morning`.
 3. **Market Lab** (`research/BLUEPRINT.md`): the crypto head runs (steps 31 to 44; the futures desk found no
-   edge after costs); next a themes page, the news lab and the human desk.
+   edge after costs); the themes page is built (27 Nov); next the news lab and the human desk.
 4. **The events calendar** (RBI, Budget, elections, US Fed).
 5. **A daily check of the simulator** against what the paper book really did.
 6. **The live order path** only after something passes: today `trading/fno/` cannot place an order.

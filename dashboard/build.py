@@ -6,7 +6,8 @@ on the server. It changes nothing and holds no secret; it only reads.
     PYTHONPATH=. .venv/bin/python dashboard/build.py        # writes state/dashboard/index.html
     deploy/dashboard.sh                                       # serves it, privately, on the Tailscale network
 
-Sections: the market today; the brain's forecast and its live score; the paper books: the explorer, the
+Sections: the market today; the themes (dashboard/themes.py: sectors and themes over 1, 3 and 12 months);
+the brain's forecast and its live score; the paper books: the explorer, the
 what-if book and V; the latest research findings; the health of the data. A section whose record does not
 exist yet says so. research/BLUEPRINT.md says what will be added (crypto, news, the human desk).
 """
@@ -243,11 +244,16 @@ main{max-width:760px;margin:auto;padding:0 16px 32px}section{background:var(--ca
 h2{font-size:15px;margin:0 0 8px;color:var(--accent)}table{width:100%;border-collapse:collapse}td,th{padding:6px 4px;border-bottom:1px solid var(--line);text-align:left;font-size:14px}
 th{color:var(--muted);font-weight:500}.num{text-align:right;font-variant-numeric:tabular-nums}.up{color:var(--up)}.down{color:var(--down)}
 .muted{color:var(--muted);font-size:13px}code{font-size:12px}ul.log{padding-left:18px;margin:0}ul.log li{margin:0 0 10px}
+h3{font-size:14px;margin:14px 0 4px}.wide{overflow-x:auto}table.tight td,table.tight th{font-size:12.5px;padding:5px 2px;white-space:nowrap}
+table.tight td:first-child{white-space:normal}
+@media (max-width:520px){.opt{display:none}}
 """
 
 
 def build(root: Path = ROOT) -> str:
-    sections = [("The market", market), ("The brain: tomorrow, and its score", brain), ("Crypto", crypto),
+    from dashboard import themes
+    sections = [("The market", market), ("Themes: which sectors are moving", themes.section),
+                ("The brain: tomorrow, and its score", brain), ("Crypto", crypto),
                 ("Crypto paper book", crypto_paper),
                 ("Paper books", books),
                 ("Latest research findings", findings), ("Data health", health)]
