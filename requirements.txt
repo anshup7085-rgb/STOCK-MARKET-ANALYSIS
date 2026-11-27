@@ -18,3 +18,6 @@ yfinance>=0.2.40
 # Optional: test runner. The suite also runs standalone:
 #   PYTHONPATH=. python3 tests/test_offline.py
 # pytest>=7.0
+
+# The crypto futures lab's tree model (research/perps_lab.py); its tests need it too.
+scikit-learn>=1.3

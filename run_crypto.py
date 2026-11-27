@@ -7,6 +7,7 @@ The crypto head's command line (research/BLUEPRINT.md, phase 2). It trades nothi
     PYTHONPATH=. .venv/bin/python run_crypto.py today       # score yesterday, forecast today (UTC)
     PYTHONPATH=. .venv/bin/python run_crypto.py live        # the minute recorder, forever (deploy/crypto.sh starts it)
     PYTHONPATH=. .venv/bin/python run_crypto.py paper       # the crypto paper book (ma50, mom30 on BTC and ETH)
+    PYTHONPATH=. .venv/bin/python run_crypto.py minutes     # perpetual futures' minutes 2021 to Oct 2024, for the futures lab
 
 Prices come from Binance's free public data. The live recorder also tops up the history every hour and,
 just after midnight UTC (05:30 IST), runs `today` and rebuilds the dashboard, so the crypto head runs by
@@ -202,6 +203,17 @@ def cmd_paper(args=None) -> int:
     return 0
 
 
+def cmd_minutes(args=None) -> int:
+    """Binance's monthly files of perpetual futures minutes and funding, exploration months only
+    (crypto/minutes.py): about 450 MB, checksum-verified, files already here are skipped."""
+    from crypto import minutes as cm
+    print(f"perpetual futures minutes and funding, {cm.FIRST:%b %Y} to {store.EXPLORE_TO:%b %Y}: {', '.join(cm.SYMBOLS)}", flush=True)
+    count = cm.download_all(log=lambda m: print(m, flush=True))
+    print(f"files: {count['new']} new, {count['have']} already here, {count['none']} not published, {count['failed']} failed"
+          + (" (run it again to retry)" if count["failed"] else ""))
+    return 1 if count["failed"] else 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="the crypto head: prices, the crypto brain; trades nothing")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -209,7 +221,8 @@ def main() -> int:
                         ("backfill", cmd_backfill, "the crypto brain's record, 2020 to Oct 2024"),
                         ("today", cmd_today, "score yesterday, forecast today (UTC)"),
                         ("live", cmd_live, "the minute recorder, forever"),
-                        ("paper", cmd_paper, "the crypto paper book: today's decisions and values")):
+                        ("paper", cmd_paper, "the crypto paper book: today's decisions and values"),
+                        ("minutes", cmd_minutes, "perpetual futures' minutes and funding for the futures lab")):
         sub.add_parser(name, help=h).set_defaults(fn=fn)
     args = ap.parse_args()
     return args.fn(args)
