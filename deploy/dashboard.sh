@@ -2,7 +2,8 @@
 # The dashboard, served PRIVATELY: only on this server's Tailscale address, so only your own devices
 # (signed in to the same Tailscale account) can open it. Never on the public internet. Read-only.
 #
-#   deploy/dashboard.sh          # build the page and serve it (again, if it stopped)
+#   deploy/dashboard.sh             # build the page and serve it (again, if it stopped)
+#   deploy/dashboard.sh --restart   # the same, restarting the server so new code takes effect
 #
 # Then on your phone, with the Tailscale app on: http://<the address it prints>:8080
 set -uo pipefail
@@ -19,11 +20,16 @@ if [ -z "$ip" ]; then
   echo "Tailscale is installed but not connected: run  sudo tailscale up  and sign in, then run this again."
   exit 0
 fi
-if pgrep -f "http.server 8080 --bind $ip" >/dev/null; then
+# the server: dashboard/serve.py (the pages, and the human desk's one input). It replaced a plain file
+# server on 27 Nov 2026; an old one still running is stopped here. --restart picks up new code.
+pkill -f "http.server 8080 --bind $ip" 2>/dev/null && sleep 1
+if [ "${1:-}" = "--restart" ]; then
+  pkill -f "dashboard/serve.py $ip" 2>/dev/null && sleep 1
+fi
+if pgrep -f "dashboard/serve.py $ip" >/dev/null; then
   echo "already serving: http://$ip:8080"
   exit 0
 fi
-setsid nohup .venv/bin/python -m http.server 8080 --bind "$ip" --directory state/dashboard \
-  >>logs/dashboard.log 2>&1 </dev/null &
+PYTHONPATH=. setsid nohup .venv/bin/python dashboard/serve.py "$ip" 8080 >>logs/dashboard.log 2>&1 </dev/null &
 sleep 1
 echo "dashboard: http://$ip:8080  (open it on a device signed in to your Tailscale account)"

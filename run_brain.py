@@ -201,6 +201,13 @@ def cmd_today(args) -> int:
             j.append("BRAIN_FORECAST", asof=day, **f)
         what = "NIFTY closes higher" if q == "up" else f"NIFTY moves more than {last['usual_move']:.2%} either way"
         print(f"  {what}: {f['p']:.0%} (it happens on {f['base']:.0%} of days anyway)")
+    try:                                                        # the holder's own views, scored the same way
+        from brain import human
+        n = human.score(rows, j.records())
+        if n:
+            print(f"\n(the human desk: {n} of your answers scored)")
+    except Exception as exc:                                    # noqa: BLE001 - it must never stop the brain
+        print(f"\n(the human desk could not be scored: {type(exc).__name__}: {str(exc)[:80]})")
     every = [r["payload"] for r in j.records() if r["type"] == "BRAIN_SCORED"]
     done = [d for d in every if not d.get("late")]
     if len(every) > len(done):

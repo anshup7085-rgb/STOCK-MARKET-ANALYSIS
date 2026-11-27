@@ -24,7 +24,7 @@ useful, not yet · **SKIP** not worth it.
 | Tick-by-tick data and full market depth | Only for strategies faster than ours | Paid vendors | SKIP for now |
 | GIFT Nifty and global cues (US index futures, crude, dollar-rupee, US yields) | Overnight direction and gap risk | Free daily sources | LATER (cheap) |
 | Results dates of NIFTY's biggest companies | Results days move the index | Public calendars | NEXT (promised 28 Oct, not yet built) |
-| Economic calendar: RBI policy, US Fed, inflation, budget, elections | Volatile days, for every strategy | Public calendars | NEXT (promised 28 Oct, not yet built) |
+| Economic calendar: RBI policy, US Fed, inflation, budget, elections | Volatile days, for every strategy | Public calendars (RBI, federalreserve.gov, bls.gov, MoSPI), each row with its source | HAVE (27 Nov): `data/events.csv`, `brain/events.py`, on the dashboard and the desk; elections not yet in |
 | News headlines, dated | Explains unusual days after the fact | News feeds | LATER |
 | Social media and Telegram tips | Mostly noise and manipulation | — | SKIP |
 

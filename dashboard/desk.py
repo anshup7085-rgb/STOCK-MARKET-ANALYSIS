@@ -97,6 +97,18 @@ def data(root: Path) -> dict:
         except Exception:                                       # noqa: BLE001 - a missing record must not break the page
             out[key] = [] if key in ("trades", "research") else {}
     try:
+        from brain import events
+        from market.calendar import load_calendar
+        out["events"] = [{"at": e.at.isoformat(), "all_day": e.all_day, "market": e.market, "event": e.event,
+                          "importance": e.importance, "status": e.status} for e in events.upcoming(days=14, cal=load_calendar())]
+    except Exception:                                           # noqa: BLE001
+        out["events"] = []
+    try:
+        from brain import human
+        out["human"] = human.summary(root / "state" / "human")
+    except Exception:                                           # noqa: BLE001
+        out["human"] = {}
+    try:
         from dashboard import themes
         out["rotation"] = themes.rotation(root)
     except Exception:                                           # noqa: BLE001
@@ -136,6 +148,10 @@ PANELS = """
 <div class=legend>each sector's strength against NIFTY 50 (across) and its change (up), weekly, with an 8-week trail.
 Our own construction (dashboard/themes.py); a description, not a signal</div></div>
 <div class=panel id=p-brain><h3>NIFTY brain · next session</h3><div id=brainbox></div></div>
+<div class=panel id=p-events><h3>Event radar · next 14 days <span class=r id=ev-next></span></h3><div id=events></div>
+<div class=legend>times in IST · from data/events.csv (sources named there) and computed expiries and holidays</div></div>
+<div class=panel id=p-you><h3>You vs the brain · the human desk</h3><div id=you></div>
+<div class=legend><a href=index.html#view>write tonight's view ▸</a> · scored each evening, on the same days as the brain</div></div>
 <div class=panel id=p-phase><h3>Market phase portrait · <span id=phase-sym>BTC</span></h3><canvas id=phase height=170></canvas>
 <div class=legend>x: last minute's move, y: last 15 minutes' move, in units of volatility; trail: the last hour</div></div>
 <div class=panel id=p-score><h3>Strategy scoreboard · ranked by evidence</h3><div id=score></div></div>
@@ -190,6 +206,8 @@ a{color:var(--amber)}
 #corr .lab{color:var(--muted);background:none;padding:7px 0}
 #funding td.num,#funding th.num{text-align:right}.cd{color:var(--muted)}
 #world-list span{display:inline-block;margin:2px 10px 2px 0}
+#events div.e{display:flex;gap:8px;padding:4px 0;border-bottom:1px dashed #220d0d}#events .t{color:var(--muted);min-width:92px}
+#events .cd{margin-left:auto;color:var(--amber);white-space:nowrap}#events .hi .w{color:#ffd9b0}#events .lo .w{color:var(--muted)}
 """
 
 

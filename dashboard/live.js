@@ -160,6 +160,42 @@
     if (lg) lg.innerHTML = legend.join("");
   }
 
+
+  // ---- the human desk: the holder's view, saved by the dashboard's server (dashboard/serve.py)
+  var vform = $("view-form");
+  function unveil() { var v = $("brain-veil"); if (v) v.classList.add("open"); }
+  if ($("veil-open")) $("veil-open").addEventListener("click", unveil);
+  function day(iso) {
+    return new Date(iso + "T12:00:00+05:30").toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", weekday: "short", day: "2-digit", month: "short" });
+  }
+  function said(text, bad) { var m = $("view-msg"); if (m) { m.textContent = text; m.className = bad ? "down" : "up"; } }
+  if (vform) {
+    ["up", "big"].forEach(function (id) { $(id).addEventListener("input", function () { $(id + "-v").textContent = $(id).value; }); });
+    fetch("api/state", { cache: "no-store" }).then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); }).then(function (st) {
+      $("view-target").textContent = "Your view for the session of " + day(st.target.session) + ". It counts if written before 09:15 IST that day; you may change it until then.";
+      if (st.mine) {
+        ["up", "big"].forEach(function (id) { if (st.mine[id] !== null) { $(id).value = Math.round(st.mine[id] * 100); $(id + "-v").textContent = $(id).value; } });
+        if (st.mine.note) $("note").value = st.mine.note;
+        said("Saved at " + st.mine.written.slice(11, 16) + " IST.");
+        unveil();
+      }
+    }).catch(function () {
+      said("Saving a view needs the dashboard's own server (deploy/dashboard.sh starts it).", true);
+      $("view-send").disabled = true;
+    });
+    vform.addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var body = JSON.stringify({ up: +$("up").value, big: +$("big").value, note: $("note").value });
+      fetch("api/view", { method: "POST", headers: { "Content-Type": "application/json" }, body: body })
+        .then(function (r) { return r.json(); })
+        .then(function (res) {
+          if (!res.ok) { said(res.error || "not saved", true); return; }
+          said("Saved for " + day(res.view.session) + " at " + res.view.written.slice(11, 16) + " IST.");
+          unveil();
+        }).catch(function () { said("Not saved: the server could not be reached.", true); });
+    });
+  }
+
   // ---- the themes heatmap
   var heat = $("heat");
   function paint(key) {

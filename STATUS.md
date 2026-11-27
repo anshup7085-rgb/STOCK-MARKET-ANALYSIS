@@ -33,7 +33,8 @@ paper, a news lab, the holder's own daily view scored beside the machine's, and 
 The plan: `research/BLUEPRINT.md`. Built so far: the dashboard (`dashboard/build.py`, served by
 `deploy/dashboard.sh` on the holder's private Tailscale network only), with a themes section and, from 27 Nov, a live-terminal look (live crypto
 prices and charts on the phone, a sector heatmap, NIFTY candles; `dashboard/themes.py`, `dashboard/live.js`) and a
-DESK page of live order flow (`desk.html`, `dashboard/desk.py`).
+DESK page of live order flow (`desk.html`, `dashboard/desk.py`), the events calendar and the human desk (served by
+`dashboard/serve.py`).
 
 ## The market brain (from 12 Nov 2026)
 
@@ -63,7 +64,9 @@ Nothing has a measured edge. The correct trading output today is **NO TRADE**.
 2. **Momentum and the opening gap** on ten years of NIFTY minutes (steps 9 and 15): they need one `morning`.
 3. **Market Lab** (`research/BLUEPRINT.md`): the crypto head runs (steps 31 to 44; the futures desk found no
    edge after costs); the themes page is built (27 Nov); next the news lab and the human desk.
-4. **The events calendar** (RBI, Budget, elections, US Fed).
+4. **The events calendar** is built (27 Nov, `brain/events.py`); next, tag past sessions with it so research can
+   ask whether policy and expiry days behave differently. The **human desk** is live on the dashboard: write a view
+   before 09:15 IST, scored each evening beside the brain.
 5. **A daily check of the simulator** against what the paper book really did.
 6. **The live order path** only after something passes: today `trading/fno/` cannot place an order.
 

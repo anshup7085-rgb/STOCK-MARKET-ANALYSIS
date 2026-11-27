@@ -620,6 +620,38 @@
     $("world-now").textContent = String(now.getUTCHours()).padStart(2, "0") + ":" + String(now.getUTCMinutes()).padStart(2, "0") + " UTC";
   }
 
+
+  // ---------------------------------------------------------------- the event radar and the human desk
+  function countdown(ms) {
+    if (ms <= 0) return "now";
+    var d = Math.floor(ms / 86400000), h = Math.floor(ms / 3600000) % 24, m = Math.floor(ms / 60000) % 60, s = Math.floor(ms / 1000) % 60;
+    return d ? d + "d " + h + "h" : h ? h + "h " + String(m).padStart(2, "0") + "m" : m + "m " + String(s).padStart(2, "0") + "s";
+  }
+  function drawEvents() {
+    var el = $("events"); if (!el) return;
+    var now = Date.now(), list = (D.events || []).filter(function (e) { return new Date(e.at).getTime() > now - (e.all_day ? 86400000 : 0); });
+    if (!list.length) { el.innerHTML = "<div class=mu>Nothing in the next 14 days.</div>"; return; }
+    el.innerHTML = list.slice(0, 12).map(function (e) {
+      var t = new Date(e.at), when = t.toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", weekday: "short", day: "2-digit", month: "short" }) +
+        (e.all_day ? "" : " " + t.toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour12: false, hour: "2-digit", minute: "2-digit" }));
+      var cls = e.importance === "high" ? "hi" : e.importance === "low" ? "lo" : "";
+      return '<div class="e ' + cls + '"><span class=t>' + esc(when) + '</span><span class=w>' + esc(e.event) +
+        (e.status !== "confirmed" && e.status !== "computed" ? ' <span class=mu>(' + esc(e.status) + ")</span>" : "") +
+        '</span><span class=cd>' + (e.all_day ? "" : countdown(t.getTime() - now)) + "</span></div>";
+    }).join("");
+    var nxt = list.filter(function (e) { return e.importance === "high"; })[0];
+    if (nxt && $("ev-next")) $("ev-next").textContent = "next big one in " + countdown(new Date(nxt.at).getTime() - now);
+  }
+  (function you() {
+    var el = $("you"); if (!el) return;
+    var h = D.human || {};
+    var rows = ["up", "big"].filter(function (q) { return h[q] && h[q].n; }).map(function (q) {
+      var r = h[q], ys = r.you && r.you.skill !== undefined ? pct(r.you.skill, 1) : "—", bs = r.brain_same_days && r.brain_same_days.skill !== undefined ? pct(r.brain_same_days.skill, 1) : "—";
+      return "<tr><td>" + q.toUpperCase() + "</td><td>" + r.n + "</td><td>" + r.right + "</td><td>" + ys + "</td><td>" + r.brain_right + "/" + r.both + "</td><td>" + bs + "</td></tr>";
+    });
+    el.innerHTML = rows.length ? "<table><tr><th>Q</th><th>SCORED</th><th>YOU RIGHT</th><th>YOUR SKILL</th><th>BRAIN RIGHT</th><th>BRAIN SKILL</th></tr>" + rows.join("") + "</table>"
+      : '<div class=mu>No view scored yet. Write one on the main page tonight; it is scored after the next session.</div>';
+  })();
   // ---------------------------------------------------------------- the clocks and the loops
   function clock() { $("utc").textContent = istNow() + " IST"; }
   setInterval(clock, 1000); clock();
@@ -628,7 +660,7 @@
   setTimeout(drawFeed, 6000);
   (function frame() { drawRing(); drawRadar(); drawSpectrum(); drawRotation(); requestAnimationFrame(frame); })();
   setInterval(drawDepth, 150);
-  setInterval(function () { drawCvd(); drawFunding(); drawWorld(); }, 1000);
+  setInterval(function () { drawCvd(); drawFunding(); drawWorld(); drawEvents(); }, 1000);
   setInterval(correlation, 60000);
   correlation(); drawWorld(); connectF();
   drawFeed();

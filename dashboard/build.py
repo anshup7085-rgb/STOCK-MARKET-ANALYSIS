@@ -237,6 +237,50 @@ def health(root: Path) -> list[str]:
     return ["<table>" + "".join(rows) + "</table>"]
 
 
+def human_desk(root: Path) -> list[str]:
+    from brain import human
+    form = ("<form id=view-form><p class=muted id=view-target>Your view for the next NSE session (it counts if written before 09:15 IST "
+            "that day).</p>"
+            "<label class=sl>NIFTY closes higher: <b><span id=up-v>50</span>%</b><input type=range id=up min=0 max=100 step=5 value=50></label>"
+            "<label class=sl>A bigger move than usual, either way: <b><span id=big-v>50</span>%</b>"
+            "<input type=range id=big min=0 max=100 step=5 value=50></label>"
+            "<textarea id=note maxlength=280 rows=2 placeholder='Why? One line (optional)'></textarea>"
+            "<button type=submit id=view-send>Save my view</button> <span id=view-msg class=muted></span></form>")
+    sm = human.summary(root / "state" / "human")
+    rows = []
+    for q, label in (("up", "UP"), ("big", "BIG")):
+        r = sm[q]
+        if not r["n"]:
+            continue
+        you = f"{r['you']['skill']:+.1%}" if "skill" in r["you"] else ""
+        br = f"{r['brain_same_days']['skill']:+.1%}" if "skill" in r["brain_same_days"] else ""
+        rows.append(f"<tr><td>{label}</td><td class=num>{r['n']}</td><td class=num>{r['right']}</td><td class=num>{you}</td>"
+                    f"<td class=num>{r['brain_right']} of {r['both']}</td><td class=num>{br}</td></tr>")
+    board = ("<p class=muted>Nothing scored yet: your first answer is scored the evening after your first view.</p>" if not rows else
+             "<table><tr><th>Question</th><th>Scored</th><th>You right</th><th>Your skill</th><th>Brain right</th><th>Brain skill</th></tr>"
+             + "".join(rows) + "</table><p class=muted>Skill: how much better than always saying the usual rate (0 is no better). "
+             "The brain is scored on the same days as you.</p>")
+    late = f"<p class=muted>{sm['late']} view(s) came after the session had opened: kept, never counted.</p>" if sm["late"] else ""
+    return [form, "<h3>The scoreboard: you against the brain</h3>", board, late]
+
+
+def events_section(root: Path) -> list[str]:
+    from brain import events
+    from market.calendar import load_calendar
+    rows = []
+    for e in events.upcoming(days=21, cal=load_calendar()):
+        when = e.at.strftime("%a %d %b") + ("" if e.all_day else e.at.strftime(" %H:%M"))
+        imp = {"high": "hi", "medium": "md"}.get(e.importance, "lo")
+        rows.append(f"<tr class={imp}><td class=num>{esc(when)}</td><td>{esc(e.market)}</td><td>{esc(e.event)}"
+                    f"<div class=muted>{esc(e.status)}</div></td></tr>")
+    if not rows:
+        return ["<p class=muted>Nothing in the next three weeks.</p>"]
+    return ["<table class=ev><tr><th class=num>When (IST)</th><th>Where</th><th>What</th></tr>" + "".join(rows) + "</table>",
+            "<p class=muted>From <code>data/events.csv</code> (each row names its source; <i>expected</i> may still move, "
+            "<i>to-check</i> is not yet read in the circular) and computed expiries and holidays. NSE's 2027 holidays are not "
+            "published yet.</p>"]
+
+
 def live(root: Path) -> list[str]:
     ticks = "".join(f"<button class=tick data-sym={sym}><b>{sym[:-4]}</b><span class=px>—</span><span class=ch></span></button>"
                     for sym in ("BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT"))
@@ -354,13 +398,21 @@ border-radius:999px;padding:4px 10px;font:600 11px var(--mono)}.heat-key.on{colo
 details{margin-top:10px}summary{cursor:pointer;color:var(--accent);font-size:13px}
 #paper-legend{display:flex;flex-wrap:wrap;gap:4px 12px;font-size:11px;color:var(--muted);padding:4px 6px}
 #paper-legend i{display:inline-block;width:10px;height:3px;margin-right:5px;vertical-align:middle;border-radius:2px}
+label.sl{display:block;margin:8px 0;font-size:13px}label.sl input{width:100%;accent-color:var(--accent)}
+#note{width:100%;background:var(--bg);color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:8px;font:13px inherit}
+#view-send{margin-top:8px;background:var(--accent);color:#04111f;border:0;border-radius:8px;padding:8px 14px;font-weight:700}
+.veil{position:relative}.veil .inner{filter:blur(7px);pointer-events:none;user-select:none}.veil.open .inner{filter:none;pointer-events:auto}
+.veil button{position:absolute;inset:30% 8% auto 8%;background:rgba(7,10,16,.92);color:var(--ink);border:1px solid var(--accent);
+border-radius:10px;padding:12px;font-size:13px}.veil.open button{display:none}
+table.ev tr.hi td:first-child{color:#f5a623}table.ev tr.lo td{color:var(--muted)}
 """
 
 
 def build(root: Path = ROOT) -> str:
     import json
     from dashboard import themes
-    sections = [("Live crypto", live), ("NIFTY 50 and the market", nifty), ("Themes: which sectors are moving", themes.section),
+    sections = [("Your view: the human desk", human_desk), ("Live crypto", live), ("NIFTY 50 and the market", nifty),
+                ("Coming up: the events calendar", events_section), ("Themes: which sectors are moving", themes.section),
                 ("The brain: tomorrow, and its score", brain), ("Crypto: the server's record and the crypto brain", crypto),
                 ("Crypto paper book", crypto_paper),
                 ("Paper books", books),
@@ -371,7 +423,11 @@ def build(root: Path = ROOT) -> str:
             inner = "".join(fn(root))
         except Exception as exc:                                # noqa: BLE001 - one broken section must not hide the rest
             inner = f"<p class=muted>Could not build this section: {esc(type(exc).__name__)}: {esc(str(exc)[:120])}</p>"
-        body.append(f"<section><h2>{esc(title)}</h2>{inner}</section>")
+        if fn is brain:
+            inner = ("<div id=brain-veil class=veil><div class=inner>" + inner + "</div><button type=button id=veil-open>"
+                     "Write your view first, so the brain does not sway you. Tap to show it anyway</button></div>")
+        anchor_id = " id=view" if fn is human_desk else ""
+        body.append(f"<section{anchor_id}><h2>{esc(title)}</h2>{inner}</section>")
     data = json.dumps(page_data(root), separators=(",", ":")).replace("</", "<\\/")
     script = (Path(__file__).resolve().parent / "live.js").read_text()
     return ("<!doctype html><html lang=en><head><meta charset=utf-8>"
