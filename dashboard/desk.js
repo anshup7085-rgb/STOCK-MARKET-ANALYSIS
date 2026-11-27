@@ -118,6 +118,7 @@
     if (buy) cell[0] += q; else cell[1] += q;
     cell[2] = p; cell[3] += 1;
     buckets[sym + (buy ? "B" : "S")][23] += 1;
+    if (sym === current) spectrumAdd(p, q, buy);
     var k = (COINS.indexOf(sym) * 19 + Math.floor(p * 1000 / (p > 100 ? 50 : 1)) + (d.a || 0) % 3) % N;
     act[k] = Math.min(1, act[k] + (q * p > 20000 ? 1 : 0.45)); side[k] = buy ? 1 : -1;
     if (q * p >= WHALE[sym]) {
@@ -129,15 +130,16 @@
     if (ws) { ws.onclose = null; try { ws.close(); } catch (e) { /* closing */ } }
     var st = [];
     COINS.forEach(function (c) { st.push(c.toLowerCase() + "@miniTicker", c.toLowerCase() + "@aggTrade"); });
-    st.push(current.toLowerCase() + "@kline_1m");
+    st.push(current.toLowerCase() + "@kline_1m", current.toLowerCase() + "@depth10@100ms");
     status("CONNECTING", "");
     try { ws = new WebSocket(WS + st.join("/")); } catch (e) { offline(); return; }
     ws.onopen = function () { retry = 2000; };
     ws.onmessage = function (ev) {
-      var d = (JSON.parse(ev.data) || {}).data || {};
+      var msg = JSON.parse(ev.data) || {}, d = msg.data || {};
       if (!connected) { connected = true; status("LIVE", "live"); log("connected to Binance's public feed: 5 coins, every trade", "g"); }
       lastMsg = Date.now();
-      if (d.e === "aggTrade") onTrade(d);
+      if (msg.stream && msg.stream.indexOf("@depth10") > 0) onDepth(d);
+      else if (d.e === "aggTrade") onTrade(d);
       else if (d.e === "24hrMiniTicker") { open24[d.s] = +d.o; setCoin(d.s, +d.c, +d.o); }
       else if (d.e === "kline" && d.s === current) onKline(d.k);
     };
@@ -357,12 +359,255 @@
     document.querySelectorAll(".coin").forEach(function (b) { b.classList.toggle("on", b.dataset.sym === sym); });
     ["flow-sym", "phase-sym"].forEach(function (id) { if ($(id)) $(id).textContent = sym.replace("USDT", ""); });
     if ($("chart-sym")) $("chart-sym").textContent = sym.replace("USDT", "-USDT");
-    times = []; closes = []; kf = null;
+    times = []; closes = []; kf = null; book = null; specSec = {}; cvd = 0; cvdSec = {};
+    ["depth-sym", "spec-sym"].forEach(function (id) { if ($(id)) $(id).textContent = sym.replace("USDT", ""); });
     if (candles) { candles.setData([]); level.setData([]); }
     history(sym).catch(function () { offline(); });
     connect();
   }
   document.querySelectorAll(".coin").forEach(function (b) { b.addEventListener("click", function () { pick(b.dataset.sym); }); });
+
+  // ---------------------------------------------------------------- order-book wall (spot, the 20 best levels)
+  var book = null, depthC = canvas("depth");
+  function onDepth(d) { book = d; }
+  function drawDepth() {
+    if (!depthC) return;
+    if (!book || !book.bids || !book.asks || !book.bids.length || !book.asks.length) {
+      depthC.x.clearRect(0, 0, depthC.w, depthC.h); depthC.x.fillStyle = MU; depthC.x.font = "10px ui-monospace,monospace";
+      depthC.x.textAlign = "left"; depthC.x.fillText(connected ? "waiting for the order book" : "no order book without the live feed", 10, 20);
+      return;
+    }
+    var x = depthC.x, w = depthC.w, h = depthC.h;
+    var bids = book.bids.map(function (l) { return [+l[0], +l[1]]; }), asks = book.asks.map(function (l) { return [+l[0], +l[1]]; });
+    var cb = [], ca = [], sb = 0, sa = 0;
+    bids.forEach(function (l) { sb += l[1]; cb.push([l[0], sb]); });
+    asks.forEach(function (l) { sa += l[1]; ca.push([l[0], sa]); });
+    var lo = bids[bids.length - 1][0], hi = asks[asks.length - 1][0], top = Math.max(sb, sa), mid = (bids[0][0] + asks[0][0]) / 2;
+    function X(pr) { return 8 + (pr - lo) / (hi - lo || 1) * (w - 16); }
+    function Yd(q) { return h - 16 - Math.sqrt(q / top) * (h - 30); }
+    x.clearRect(0, 0, w, h);
+    [[cb, "rgba(53,211,154,"], [ca, "rgba(255,77,94,"]].forEach(function (sd) {
+      var pts = sd[0], col = sd[1];
+      x.beginPath(); x.moveTo(X(pts[0][0]), h - 16);
+      pts.forEach(function (pt) { x.lineTo(X(pt[0]), Yd(pt[1])); });
+      x.lineTo(X(pts[pts.length - 1][0]), h - 16); x.closePath();
+      var g = x.createLinearGradient(0, 0, 0, h); g.addColorStop(0, col + ".55)"); g.addColorStop(1, col + ".05)");
+      x.fillStyle = g; x.fill(); x.strokeStyle = col + ".95)"; x.lineWidth = 1.2; x.stroke();
+    });
+    x.strokeStyle = Y; x.setLineDash([3, 3]); x.beginPath(); x.moveTo(X(mid), 8); x.lineTo(X(mid), h - 16); x.stroke(); x.setLineDash([]);
+    x.fillStyle = MU; x.font = "9px ui-monospace,monospace"; x.textAlign = "left"; x.fillText(fmt(lo, dig(lo)), 8, h - 4);
+    x.textAlign = "right"; x.fillText(fmt(hi, dig(hi)), w - 8, h - 4); x.textAlign = "center"; x.fillStyle = Y; x.fillText(fmt(mid, dig(mid)), X(mid), h - 4);
+    var imb = sb / (sb + sa);
+    $("depth-imb").innerHTML = '<span class="' + (imb >= .5 ? "g" : "rd") + '">bids ' + Math.round(imb * 100) + "%</span> · spread " + fmt(asks[0][0] - bids[0][0], dig(mid));
+  }
+
+  // ---------------------------------------------------------------- trade-size spectrum and cumulative delta
+  var BINS = 12, specSec = {}, shown = new Float32Array(BINS * 2), cvd = 0, cvdSec = {}, specC = canvas("spectrum"), cvdC = canvas("cvd");
+  function spectrumAdd(p, q, buy) {
+    var usd = p * q, b = Math.max(0, Math.min(BINS - 1, Math.floor((Math.log10(Math.max(usd, 1)) - 1) * 2)));
+    var s = Math.floor(Date.now() / 1000), e = specSec[s] || (specSec[s] = new Float32Array(BINS * 2));
+    e[b + (buy ? 0 : BINS)] += 1;
+    cvd += buy ? q : -q; cvdSec[s] = cvd;
+  }
+  function drawSpectrum() {
+    if (!specC) return;
+    var x = specC.x, w = specC.w, h = specC.h, now = Math.floor(Date.now() / 1000), tgt = new Float32Array(BINS * 2), m = 1, i;
+    for (var k in specSec) { if (+k < now - 30) { delete specSec[k]; continue; } for (i = 0; i < BINS * 2; i++) tgt[i] += specSec[k][i]; }
+    for (i = 0; i < BINS * 2; i++) m = Math.max(m, tgt[i]);
+    x.clearRect(0, 0, w, h);
+    var bw = (w - 20) / BINS, mid = h / 2 - 6;
+    for (i = 0; i < BINS; i++) {
+      shown[i] += (Math.sqrt(tgt[i] / m) - shown[i]) * 0.18; shown[i + BINS] += (Math.sqrt(tgt[i + BINS] / m) - shown[i + BINS]) * 0.18;
+      var up = shown[i] * (mid - 4), dn = shown[i + BINS] * (mid - 4), x0 = 10 + i * bw + 1;
+      var steps = 6;
+      for (var s2 = 0; s2 < steps; s2++) {
+        var hu = up / steps, hd = dn / steps, a = 0.35 + 0.65 * (s2 + 1) / steps;
+        if (hu > .5) { x.fillStyle = "rgba(53,211,154," + a.toFixed(2) + ")"; x.fillRect(x0, mid - (s2 + 1) * hu, bw - 3, hu - 1); }
+        if (hd > .5) { x.fillStyle = "rgba(255,77,94," + a.toFixed(2) + ")"; x.fillRect(x0, mid + s2 * hd + 1, bw - 3, hd - 1); }
+      }
+    }
+    x.fillStyle = MU; x.font = "9px ui-monospace,monospace"; x.textAlign = "center";
+    ["$10", "$100", "$1k", "$10k", "$100k", "$1M"].forEach(function (lab, j) { x.fillText(lab, 10 + (j * 2 + 1) * bw, h - 2); });
+  }
+  function drawCvd() {
+    if (!cvdC) return;
+    var x = cvdC.x, w = cvdC.w, h = cvdC.h, now = Math.floor(Date.now() / 1000), pts = [], last = null, i;
+    for (i = 599; i >= 0; i--) { if (cvdSec[now - i] !== undefined) last = cvdSec[now - i]; pts.push(last); }
+    for (var k in cvdSec) if (+k < now - 700) delete cvdSec[k];
+    var vals = pts.filter(function (v) { return v !== null; });
+    x.clearRect(0, 0, w, h);
+    if (vals.length < 2) return;
+    var lo = Math.min.apply(null, vals.concat([0])), hi = Math.max.apply(null, vals.concat([0])), rng = hi - lo || 1;
+    function Yc(v) { return 6 + (1 - (v - lo) / rng) * (h - 12); }
+    x.strokeStyle = "#2c1111"; x.beginPath(); x.moveTo(0, Yc(0)); x.lineTo(w, Yc(0)); x.stroke();
+    x.beginPath(); var st = false;
+    pts.forEach(function (v, j) { if (v === null) return; var xx = j / 599 * w; if (!st) { x.moveTo(xx, Yc(v)); st = true; } else x.lineTo(xx, Yc(v)); });
+    x.strokeStyle = cvd >= 0 ? G : RD; x.lineWidth = 1.6; x.stroke();
+    $("cvd-now").innerHTML = 'delta <span class="' + (cvd >= 0 ? "g" : "rd") + '">' + (cvd >= 0 ? "+" : "") + fmt(cvd, Math.abs(cvd) >= 100 ? 0 : 2) + "</span>";
+  }
+
+  // ---------------------------------------------------------------- futures: liquidations and funding
+  var FWS = "wss://fstream.binance.com/stream?streams=!forceOrder@arr/" + COINS.map(function (c) { return c.toLowerCase() + "@markPrice@1s"; }).join("/");
+  var fws = null, fConnected = false, fTried = 0, blips = [], marks = {}, radarC = canvas("radar"), sweep = 0;
+  function connectF() {
+    if (fws) { fws.onclose = null; try { fws.close(); } catch (e) { /* closing */ } }
+    fTried += 1;
+    try { fws = new WebSocket(FWS); } catch (e) { fOff(); return; }
+    fws.onmessage = function (ev) {
+      var m = JSON.parse(ev.data) || {}, d = m.data;
+      if (!fConnected) { fConnected = true; log("connected to Binance's futures feed: liquidations and funding", "g"); $("fund-note").textContent = "live"; }
+      if (d && d.e === "markPriceUpdate") marks[d.s] = d;
+      else if (d && d.e === "forceOrder") onLiq(d.o);
+    };
+    fws.onclose = function () {
+      var was = fConnected; fConnected = false;
+      if (!was && fTried >= 2) { fOff(); return; }
+      setTimeout(connectF, was ? 3000 : 8000);
+    };
+  }
+  function fOff() {
+    $("fund-note").textContent = "unreachable";
+    $("liq-sum").textContent = "unreachable";
+    var n = $("liq-note"); if (n) n.innerHTML = "Binance's futures feed cannot be reached from this device or network, so the radar and the funding board stay empty. Nothing here is made up.";
+    var f = $("funding"); if (f) f.innerHTML = '<div class=mu>No futures feed on this device.</div>';
+    log("Binance's futures feed is unreachable from this device: radar and funding stay empty", "y");
+  }
+  function onLiq(o) {
+    var usd = +o.q * +(o.ap || o.p), longGone = o.S === "SELL", sym = o.s, a = 0;
+    for (var i = 0; i < sym.length; i++) a = (a * 31 + sym.charCodeAt(i)) % 3600;
+    blips.push({ t: Date.now(), usd: usd, long: longGone, ang: a / 3600 * Math.PI * 2, sym: sym });
+    if (usd >= 50000) { var txt = "LIQUIDATED " + (longGone ? "LONG " : "SHORT ") + sym.replace("USDT", "") + " · $" + fmt(usd / 1000, 0) + "k"; log(txt, longGone ? "rd" : "g"); feed(txt); }
+  }
+  function drawRadar() {
+    if (!radarC) return;
+    var x = radarC.x, w = radarC.w, h = radarC.h, cx = w / 2, cy = h / 2, R = Math.min(w, h) / 2 - 8, now = Date.now(), i;
+    x.clearRect(0, 0, w, h);
+    x.strokeStyle = "rgba(255,106,61,.18)";
+    for (i = 1; i <= 4; i++) { x.beginPath(); x.arc(cx, cy, R * i / 4, 0, Math.PI * 2); x.stroke(); }
+    x.beginPath(); x.moveTo(cx - R, cy); x.lineTo(cx + R, cy); x.moveTo(cx, cy - R); x.lineTo(cx, cy + R); x.stroke();
+    if (fConnected) {
+      sweep += 0.02;
+      var g = x.createConicGradient ? x.createConicGradient(sweep - 0.6, cx, cy) : null;
+      if (g) { g.addColorStop(0, "rgba(255,106,61,0)"); g.addColorStop(0.09, "rgba(255,106,61,.28)"); g.addColorStop(0.1, "rgba(255,106,61,0)");
+        x.fillStyle = g; x.beginPath(); x.arc(cx, cy, R, 0, Math.PI * 2); x.fill(); }
+    }
+    var lo = 0, sh = 0;
+    blips = blips.filter(function (b) { return now - b.t < 300000; });
+    blips.forEach(function (b) {
+      var age = (now - b.t) / 300000, r = R * (0.08 + 0.92 * age), size = 2 + Math.max(0, Math.log10(b.usd) - 2) * 3;
+      var px = cx + r * Math.cos(b.ang), py = cy + r * Math.sin(b.ang), a = 1 - age;
+      x.fillStyle = (b.long ? "rgba(255,77,94," : "rgba(53,211,154,") + (0.25 + 0.75 * a).toFixed(2) + ")";
+      x.beginPath(); x.arc(px, py, size, 0, Math.PI * 2); x.fill();
+      if (now - b.t < 1500) { x.strokeStyle = b.long ? RD : G; x.beginPath(); x.arc(px, py, size + (now - b.t) / 60, 0, Math.PI * 2); x.stroke(); }
+      if (b.usd >= 50000 && a > .4) { x.fillStyle = "rgba(236,220,207," + a.toFixed(2) + ")"; x.font = "9px ui-monospace,monospace"; x.fillText(b.sym.replace("USDT", ""), px + size + 2, py + 3); }
+      if (b.long) lo += b.usd; else sh += b.usd;
+    });
+    if (fConnected) $("liq-sum").innerHTML = '5 min: <span class=rd>longs $' + fmt(lo / 1000, 0) + 'k</span> · <span class=g>shorts $' + fmt(sh / 1000, 0) + "k</span>";
+  }
+  function drawFunding() {
+    var f = $("funding"); if (!f || !fConnected) return;
+    var rows = COINS.filter(function (c) { return marks[c]; }).map(function (c) {
+      var u = marks[c], r = +u.r, left = Math.max(0, +u.T - Date.now()), hh = Math.floor(left / 3600000), mm = Math.floor(left / 60000) % 60, ss = Math.floor(left / 1000) % 60;
+      return "<tr><td>" + c.replace("USDT", "") + "</td><td class=num>" + fmt(+u.p, dig(+u.p)) + '</td><td class="num ' + (r >= 0 ? "g" : "rd") + '">' + (r * 100).toFixed(4) +
+        '%</td><td class="num ' + (r >= 0 ? "g" : "rd") + '">' + (r * 3 * 365 * 100).toFixed(1) + '%</td><td class="num cd">' + hh + ":" + String(mm).padStart(2, "0") + ":" + String(ss).padStart(2, "0") + "</td></tr>";
+    }).join("");
+    f.innerHTML = '<table><tr><th>COIN</th><th class=num>MARK</th><th class=num>8H RATE</th><th class=num>YEARLY</th><th class=num>NEXT</th></tr>' + rows + "</table>";
+  }
+
+  // ---------------------------------------------------------------- correlation, last 60 minutes
+  function correlation() {
+    var el = $("corr"); if (!el) return;
+    Promise.all(COINS.map(function (c) {
+      return fetch(REST + "?symbol=" + c + "&interval=1m&limit=61").then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); });
+    })).then(function (all) {
+      var rets = all.map(function (rows) { var out = []; for (var i = 1; i < rows.length; i++) out.push(Math.log(+rows[i][4] / +rows[i - 1][4])); return out; });
+      function c(a, b) {
+        var n = Math.min(a.length, b.length), ma = 0, mb = 0, i; for (i = 0; i < n; i++) { ma += a[i]; mb += b[i]; } ma /= n; mb /= n;
+        var sab = 0, saa = 0, sbb = 0; for (i = 0; i < n; i++) { sab += (a[i] - ma) * (b[i] - mb); saa += (a[i] - ma) * (a[i] - ma); sbb += (b[i] - mb) * (b[i] - mb); }
+        return saa && sbb ? sab / Math.sqrt(saa * sbb) : 0;
+      }
+      var html = "<div class=lab></div>" + COINS.map(function (k) { return "<div class=lab>" + k.replace("USDT", "") + "</div>"; }).join("");
+      COINS.forEach(function (a, i) {
+        html += "<div class=lab>" + a.replace("USDT", "") + "</div>";
+        COINS.forEach(function (b, j) {
+          var v = i === j ? 1 : c(rets[i], rets[j]), al = Math.min(1, Math.abs(v));
+          var bg = v >= 0 ? "rgba(255,154,60," + (0.08 + 0.8 * al).toFixed(2) + ")" : "rgba(77,163,255," + (0.08 + 0.8 * al).toFixed(2) + ")";
+          html += '<div style="background:' + bg + ";color:" + (al > .55 ? "#1a0503" : "#ecdccf") + '">' + v.toFixed(2) + "</div>";
+        });
+      });
+      el.innerHTML = html;
+    }).catch(function () { el.innerHTML = "<div class=mu style='grid-column:1/-1'>The price history cannot be reached from this device.</div>"; });
+  }
+
+  // ---------------------------------------------------------------- the sector rotation map (from the server)
+  var rotC = canvas("rot"), rotStart = Date.now(), rotDone = false;
+  function drawRotation() {
+    if (!rotC || rotDone) return;
+    if (Date.now() - rotStart > 2600) rotDone = true;
+    var data = D.rotation || [], x = rotC.x, w = rotC.w, h = rotC.h;
+    x.clearRect(0, 0, w, h);
+    if (!data.length) { x.fillStyle = MU; x.font = "11px ui-monospace,monospace"; x.fillText("No NSE history on this server yet.", 10, 20); return; }
+    if ($("rot-asof")) $("rot-asof").textContent = "week of " + data[0].asof;
+    var xs = [], ys = [];
+    data.forEach(function (d) { d.trail.forEach(function (p) { xs.push(p[0]); ys.push(p[1]); }); });
+    var sx = Math.max(1.5, Math.max.apply(null, xs.map(function (v) { return Math.abs(v - 100); }))) * 1.1;
+    var sy = Math.max(1.5, Math.max.apply(null, ys.map(function (v) { return Math.abs(v - 100); }))) * 1.1;
+    function X(v) { return w / 2 + (v - 100) / sx * (w / 2 - 6); }
+    function Yr(v) { return h / 2 - (v - 100) / sy * (h / 2 - 6); }
+    [["rgba(53,211,154,.07)", w / 2, 0, "LEADING", w - 6, 12, "right"], ["rgba(255,201,60,.07)", w / 2, h / 2, "WEAKENING", w - 6, h - 6, "right"],
+     ["rgba(255,77,94,.07)", 0, h / 2, "LAGGING", 6, h - 6, "left"], ["rgba(77,163,255,.07)", 0, 0, "IMPROVING", 6, 12, "left"]].forEach(function (q) {
+      x.fillStyle = q[0]; x.fillRect(q[1], q[2], w / 2, h / 2);
+      x.fillStyle = MU; x.font = "700 9px ui-monospace,monospace"; x.textAlign = q[6]; x.fillText(q[3], q[4], q[5]);
+    });
+    x.strokeStyle = "#3a1616"; x.beginPath(); x.moveTo(w / 2, 0); x.lineTo(w / 2, h); x.moveTo(0, h / 2); x.lineTo(w, h / 2); x.stroke();
+    var grow = Math.min(1, (Date.now() - rotStart) / 2500);
+    data.forEach(function (d) {
+      var t = d.trail, n = Math.max(2, Math.ceil(t.length * grow)), last = t[n - 1], lx = X(last[0]), ly = Yr(last[1]);
+      var col = last[0] >= 100 ? (last[1] >= 100 ? "53,211,154" : "255,201,60") : (last[1] >= 100 ? "77,163,255" : "255,77,94");
+      for (var i = 1; i < n; i++) {
+        x.strokeStyle = "rgba(" + col + "," + (0.15 + 0.6 * i / t.length).toFixed(2) + ")"; x.lineWidth = 1.2;
+        x.beginPath(); x.moveTo(X(t[i - 1][0]), Yr(t[i - 1][1])); x.lineTo(X(t[i][0]), Yr(t[i][1])); x.stroke();
+      }
+      x.fillStyle = "rgb(" + col + ")"; x.beginPath(); x.arc(lx, ly, 3, 0, Math.PI * 2); x.fill();
+      x.fillStyle = "rgba(236,220,207,.85)"; x.font = "9px ui-monospace,monospace"; x.textAlign = lx > w * .75 ? "right" : "left";
+      x.fillText(d.label, lx + (lx > w * .75 ? -5 : 5), ly - 4);
+    });
+  }
+
+  // ---------------------------------------------------------------- the world market clock
+  var worldC = canvas("world");
+  var MARKETS = [["NSE", "Asia/Kolkata", 555, 930, "#ff9a3c"], ["TOKYO", "Asia/Tokyo", 540, 900, "#ff5fa2"],
+                 ["LONDON", "Europe/London", 480, 990, "#4da3ff"], ["NEW YORK", "America/New_York", 570, 960, "#35d39a"]];
+  function local(tz, d) {
+    var p = {}; new Intl.DateTimeFormat("en-GB", { timeZone: tz, hour12: false, weekday: "short", hour: "2-digit", minute: "2-digit" })
+      .formatToParts(d).forEach(function (q) { p[q.type] = q.value; });
+    return { wd: p.weekday, min: (+p.hour % 24) * 60 + (+p.minute) };
+  }
+  function drawWorld() {
+    if (!worldC) return;
+    var x = worldC.x, w = worldC.w, h = worldC.h, cx = w / 2, cy = h / 2 + 2, R = Math.min(w, h) / 2 - 10, now = new Date();
+    var utcMin = now.getUTCHours() * 60 + now.getUTCMinutes() + now.getUTCSeconds() / 60;
+    function ang(m) { return (m / 1440) * Math.PI * 2 - Math.PI / 2; }
+    x.clearRect(0, 0, w, h);
+    x.strokeStyle = "rgba(255,201,60,.55)"; x.lineWidth = 3; x.beginPath(); x.arc(cx, cy, R, 0, Math.PI * 2); x.stroke();
+    x.fillStyle = MU; x.font = "9px ui-monospace,monospace"; x.textAlign = "center";
+    for (var hh = 0; hh < 24; hh += 3) { var a = ang(hh * 60); x.fillText(String(hh).padStart(2, "0"), cx + (R - 14) * Math.cos(a), cy + (R - 14) * Math.sin(a) + 3); }
+    var list = ['<span class=y>● CRYPTO open 24/7</span>'];
+    MARKETS.forEach(function (mk, i) {
+      var l = local(mk[1], now), off = l.min - (now.getUTCHours() * 60 + now.getUTCMinutes()); if (off > 720) off -= 1440; if (off < -720) off += 1440;
+      var o = mk[2] - off, c = mk[3] - off, rr = R - 30 - i * 13;
+      var open = ["Sat", "Sun"].indexOf(l.wd) < 0 && l.min >= mk[2] && l.min < mk[3];
+      x.strokeStyle = open ? mk[4] : "rgba(141,115,104,.35)"; x.lineWidth = open ? 6 : 4; x.lineCap = "round";
+      x.beginPath(); x.arc(cx, cy, rr, ang(o), ang(c)); x.stroke();
+      list.push('<span style="color:' + (open ? mk[4] : "#8d7368") + '">● ' + mk[0] + " " + (open ? "OPEN" : "closed") + "</span>");
+    });
+    x.lineCap = "butt";
+    var na = ang(utcMin);
+    x.strokeStyle = "#ecdccf"; x.lineWidth = 1.5; x.beginPath(); x.moveTo(cx, cy); x.lineTo(cx + (R - 4) * Math.cos(na), cy + (R - 4) * Math.sin(na)); x.stroke();
+    x.fillStyle = "#ff6a3d"; x.beginPath(); x.arc(cx, cy, 4, 0, Math.PI * 2); x.fill();
+    $("world-list").innerHTML = list.join("") + "<br>the dial is UTC; regular hours only, holidays not shown";
+    $("world-now").textContent = String(now.getUTCHours()).padStart(2, "0") + ":" + String(now.getUTCMinutes()).padStart(2, "0") + " UTC";
+  }
 
   // ---------------------------------------------------------------- the clocks and the loops
   function clock() { $("utc").textContent = istNow() + " IST"; }
@@ -370,7 +615,11 @@
   setInterval(drawFlow, 1000);
   setInterval(drawFeed, 30000);
   setTimeout(drawFeed, 6000);
-  (function frame() { drawRing(); requestAnimationFrame(frame); })();
+  (function frame() { drawRing(); drawRadar(); drawSpectrum(); drawRotation(); requestAnimationFrame(frame); })();
+  setInterval(drawDepth, 150);
+  setInterval(function () { drawCvd(); drawFunding(); drawWorld(); }, 1000);
+  setInterval(correlation, 60000);
+  correlation(); drawWorld(); connectF();
   drawFeed();
   pick(current);
 })();

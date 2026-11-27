@@ -96,28 +96,50 @@ def data(root: Path) -> dict:
             out[key] = fn(root)
         except Exception:                                       # noqa: BLE001 - a missing record must not break the page
             out[key] = [] if key in ("trades", "research") else {}
+    try:
+        from dashboard import themes
+        out["rotation"] = themes.rotation(root)
+    except Exception:                                           # noqa: BLE001
+        out["rotation"] = []
     out["scoreboard"] = [dict(zip(("name", "market", "result", "verdict", "note", "step"), s)) for s in SCOREBOARD]
     return out
 
 
 PANELS = """
 <div class=panel id=p-wallet><h3>Paper desk <span class=tag>PAPER</span></h3><div id=wallet></div></div>
+<div class=panel id=p-world><h3>World market clock <span class=r id=world-now></span></h3><canvas id=world height=210></canvas>
+<div id=world-list class=legend></div></div>
 <div class=panel id=p-flow><h3>Live order flow · <span id=flow-sym>BTC</span> <span class=r id=flow-share></span></h3>
 <canvas id=flow height=150></canvas><div class=legend><span class=g>■ buyers</span> <span class=rd>■ sellers</span>
 <span class=y>— price</span> · last 5 minutes, per second</div></div>
+<div class=panel id=p-depth><h3>Order-book wall · <span id=depth-sym>BTC</span> <span class=r id=depth-imb></span></h3>
+<canvas id=depth height=170></canvas><div class=legend>the 10 best bids (green) and asks (red), stacked; updated 10 times a second</div></div>
 <div class=panel id=p-heat><h3>Trade arrival · 5-second buckets <span class=r id=heat-rate></span></h3><div id=arrivals></div>
 <div class=legend>each cell: real trades in 5 seconds · B buys, S sells</div></div>
-<div class=panel id=p-ring><h3>Order-flow ring <span class=r id=ring-sig></span></h3><canvas id=ring height=300></canvas>
+<div class=panel id=p-ring><h3>Order-flow ring <span class=r id=ring-sig></span></h3><canvas id=ring height=280></canvas>
 <div class=legend>a strand lights for each real trade: green a buyer, red a seller</div></div>
-<div class=panel id=p-brain><h3>NIFTY brain · next session</h3><div id=brainbox></div></div>
-<div class=panel id=p-score><h3>Strategy scoreboard · ranked by evidence</h3><div id=score></div></div>
+<div class=panel id=p-spec><h3>Trade-size spectrum · <span id=spec-sym>BTC</span> <span class=r id=cvd-now></span></h3>
+<canvas id=spectrum height=130></canvas><canvas id=cvd height=80></canvas>
+<div class=legend>bars: the last 30 seconds' trades by size, buyers up, sellers down · line: cumulative buying minus selling since you opened the page</div></div>
+<div class=panel id=p-liq><h3>Liquidation radar · futures <span class=r id=liq-sum></span></h3><canvas id=radar height=230></canvas>
+<div class=legend id=liq-note>each blip a real forced close on Binance futures, any coin: <span class=rd>red</span> longs wiped out,
+<span class=g>green</span> shorts; size by money, drifting out as it ages (5 minutes)</div></div>
+<div class=panel id=p-fund><h3>Funding board · perpetual futures <span class=r id=fund-note></span></h3><div id=funding></div>
+<div class=legend>what leveraged longs pay shorts (or the reverse) every 8 hours; yearly is that rate x 3 x 365</div></div>
+<div class=panel id=p-corr><h3>Correlation · last 60 minutes</h3><div id=corr></div>
+<div class=legend>of 1-minute returns; 1.00 moves in lockstep, 0 unrelated. High values mean five coins are one bet</div></div>
 <div class=panel id=p-chart><h3><span id=chart-sym>BTC-USDT</span> · 1m <span class=r id=chart-last></span></h3>
 <div id=desk-chart></div><div class=legend><span class=y>— Kalman level</span> · candles live from Binance</div></div>
 <div class=panel id=p-kalman><h3>State-space estimator · Kalman on price <span class=r id=kgain></span></h3>
-<canvas id=innov height=120></canvas><div class=legend>bars: innovations (price minus the filter's forecast)</div></div>
-<div class=panel id=p-trades><h3>Paper trades</h3><div id=trades></div></div>
+<canvas id=innov height=110></canvas><div class=legend>bars: innovations (price minus the filter's forecast)</div></div>
+<div class=panel id=p-rot><h3>Sector rotation map · NSE <span class=r id=rot-asof></span></h3><canvas id=rot height=320></canvas>
+<div class=legend>each sector's strength against NIFTY 50 (across) and its change (up), weekly, with an 8-week trail.
+Our own construction (dashboard/themes.py); a description, not a signal</div></div>
+<div class=panel id=p-brain><h3>NIFTY brain · next session</h3><div id=brainbox></div></div>
 <div class=panel id=p-phase><h3>Market phase portrait · <span id=phase-sym>BTC</span></h3><canvas id=phase height=170></canvas>
 <div class=legend>x: last minute's move, y: last 15 minutes' move, in units of volatility; trail: the last hour</div></div>
+<div class=panel id=p-score><h3>Strategy scoreboard · ranked by evidence</h3><div id=score></div></div>
+<div class=panel id=p-trades><h3>Paper trades</h3><div id=trades></div></div>
 <div class=panel id=p-log><h3>Desk log <span class=r><span class=dot></span>live</span></h3><div id=log></div></div>
 """
 
@@ -164,6 +186,10 @@ th{color:var(--muted);font-weight:500;font-size:9px;letter-spacing:.06em}
 @keyframes bl{50%{opacity:.25}}.foot{color:var(--muted);font-size:9.5px;padding:0 12px 30px;text-align:center}
 .flash-up{animation:fu .8s}.flash-down{animation:fd .8s}@keyframes fu{0%{background:rgba(53,211,154,.35)}}@keyframes fd{0%{background:rgba(255,77,94,.35)}}
 a{color:var(--amber)}
+#corr{display:grid;grid-template-columns:36px repeat(5,1fr);gap:3px}#corr div{text-align:center;padding:7px 0;border-radius:4px;font-size:10px}
+#corr .lab{color:var(--muted);background:none;padding:7px 0}
+#funding td.num,#funding th.num{text-align:right}.cd{color:var(--muted)}
+#world-list span{display:inline-block;margin:2px 10px 2px 0}
 """
 
 

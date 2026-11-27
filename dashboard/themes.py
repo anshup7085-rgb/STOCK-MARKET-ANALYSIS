@@ -111,6 +111,41 @@ def coin_rows(root: Path) -> list[dict]:
     return out
 
 
+WEEK, BASE_WEEKS, MOM_WEEKS, TRAIL = 5, 10, 4, 8
+
+
+def rotation(root: Path, items=SECTORS) -> list[dict]:
+    """The sector rotation map, our own transparent construction (not any vendor's formula), weekly, i.e.
+    every 5th session counted back from the last:
+        rs = index / NIFTY 50
+        x  = 100 x rs / its average over the last 10 weeks          (above 100: stronger than its recent norm)
+        y  = 100 x x / x four weeks earlier                          (above 100: getting stronger)
+    Each item carries its last 8 weekly points, oldest first. Quadrants: x and y above 100 leading, x above
+    and y below weakening, both below lagging, x below and y above improving."""
+    _, ix = load(root)
+    nifty = ix.get("nifty 50", {})
+    need = BASE_WEEKS + MOM_WEEKS + TRAIL
+    out = []
+    for label, name in items:
+        s = ix.get(name, {})
+        days = [d for d in sorted(s) if d in nifty]
+        if len(days) < (need - 1) * WEEK + 1:
+            continue
+        picks = days[::-1][::WEEK][:need][::-1]
+        rs = [s[d] / nifty[d] for d in picks]
+        xs = [None] * len(rs)
+        for i in range(BASE_WEEKS - 1, len(rs)):
+            base = sum(rs[i - BASE_WEEKS + 1:i + 1]) / BASE_WEEKS
+            xs[i] = 100 * rs[i] / base
+        trail = []
+        for i in range(len(rs) - TRAIL, len(rs)):
+            if xs[i] is not None and i - MOM_WEEKS >= 0 and xs[i - MOM_WEEKS] is not None:
+                trail.append([round(xs[i], 3), round(100 * xs[i] / xs[i - MOM_WEEKS], 3)])
+        if len(trail) == TRAIL:
+            out.append({"label": label, "trail": trail, "asof": picks[-1].isoformat()})
+    return out
+
+
 def pct(x) -> str:
     if x is None:
         return "<td class=num>—</td>"

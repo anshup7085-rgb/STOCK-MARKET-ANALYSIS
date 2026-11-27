@@ -62,6 +62,30 @@ def test_no_file_says_so():
         assert "No NSE index file yet" in "".join(t.section(Path(tmp)))
 
 
+def test_the_rotation_map_places_each_sector_by_strength_and_its_change():
+    import math
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        d, rows_by_day = date(2025, 6, 2), []
+        for i in range(160):
+            while d.weekday() >= 5:
+                d += timedelta(days=1)
+            rows = [("Nifty 50", 100.0), ("Nifty IT", 100 * math.exp(0.00002 * i * i)), ("Nifty Metal", 100 * math.exp(-0.00002 * i * i)),
+                    ("Nifty Pharma", 100 * (1 + 0.1 * math.sin(i / 160 * math.pi)))]
+            p = root / "state" / "nse_archive" / "index_close" / str(d.year) / f"ind_close_all_{d:%d%m%Y}.csv"
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(HEAD + "".join(f"{n},{d:%d-%m-%Y},1,1,1,{c:.6f},20\n" for n, c in rows))
+            d += timedelta(days=1)
+        got = {r["label"]: r["trail"] for r in t.rotation(root)}
+    assert set(got) == {"IT", "Metal", "Pharma"} and all(len(v) == t.TRAIL for v in got.values())
+    x, y = got["IT"][-1]
+    assert x > 100 and y > 100                                   # stronger, and getting stronger: leading
+    x, y = got["Metal"][-1]
+    assert x < 100 and y < 100                                   # weaker, and getting weaker: lagging
+    x, y = got["Pharma"][-1]
+    assert x < 100                                               # it rose, then gave back: below its recent norm
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):
