@@ -200,7 +200,9 @@ def funding_paid(fund_t: np.ndarray, fund_r: np.ndarray, t_in: np.ndarray, t_out
 
 # ---------------------------------------------------------------- building the table
 
-def coin_table(sym: int, name: str, root: Path | None, btc: pd.DataFrame | None, log=print) -> pd.DataFrame:
+def coin_table(sym: int, name: str, root: Path | None, btc: pd.DataFrame | None, log=print,
+               horizons=None, keep: dict | None = None) -> pd.DataFrame:
+    """The decision rows of one coin. `keep`, if given, receives the minute grid and funding for replays."""
     c = cm.load(name, DATA_FROM, EXPLORE_TO, root=root)
     if not len(c["t"]):
         raise SystemExit(f"no minutes for {name}: run `run_crypto.py minutes` first")
@@ -220,7 +222,9 @@ def coin_table(sym: int, name: str, root: Path | None, btc: pd.DataFrame | None,
         tab["btc60"] = m["ret60"].reindex(tab["t_close"]).to_numpy()
     else:
         tab["btc5"], tab["btc60"] = tab["ret5"], tab["ret60"]
-    for h in HORIZONS:
+    if keep is not None:
+        keep.update(g=g, idx=idx, sig=sig, fund_t=fund_t, fund_r=fund_r)
+    for h in (horizons or HORIZONS):
         for side, s in (("long", 1), ("short", -1)):
             cls, ret, dur = brackets(g, sig, idx, h, s)
             tab[f"c_{h}_{side}"], tab[f"r_{h}_{side}"], tab[f"d_{h}_{side}"] = cls, ret, dur
@@ -266,6 +270,7 @@ def walk_forward(tab: pd.DataFrame, names: list[str], h: int, side: str, log=pri
     cat = [names.index("coin")]
     ev = np.full(len(tab), np.nan)
     hold = np.full(len(tab), np.nan)
+    p_tp = np.full(len(tab), np.nan)
     end = ms(add_months(date(EXPLORE_TO.year, EXPLORE_TO.month, 1), 1))
     for q in quarters(TEST_FROM, EXPLORE_TO):
         q0, q1 = ms(q), min(ms(add_months(q, 3)), end)
@@ -282,8 +287,9 @@ def walk_forward(tab: pd.DataFrame, names: list[str], h: int, side: str, log=pri
         u = tab["u"].to_numpy()[test] * math.sqrt(h)
         ev[test] = sum(p[:, i] * mean_r[k] for i, k in enumerate(model.classes_)) * u
         hold[test] = sum(p[:, i] * mean_d[k] for i, k in enumerate(model.classes_))
+        p_tp[test] = sum(p[:, i] for i, k in enumerate(model.classes_) if k == TP)
         log(f"    H{h} {side:<5} {q:%Y-%m}: trained on {int(train.sum()):,} rows, tested {int(test.sum()):,}")
-    return pd.DataFrame({"ev": ev, "hold": hold})
+    return pd.DataFrame({"ev": ev, "hold": hold, "p_tp": p_tp})
 
 
 # ---------------------------------------------------------------- the books
