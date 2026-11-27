@@ -56,6 +56,32 @@ def test_a_working_server_shows_the_market_the_brain_the_books_and_the_findings(
     assert "Could not build" not in page
 
 
+def test_the_terminal_page_carries_its_data_and_its_live_layer():
+    import json
+    import re
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _index(root, date(2026, 11, 18), 25000.0, 15.0)
+        _index(root, date(2026, 11, 19), 25250.0, 14.0)
+        j = Journal(root / "state" / "crypto" / "paper" / "journal.jsonl", "crypto-paper")
+        acct = {"in": True, "free_value": 101000.0, "india_value": 100500.0, "spec_value": 100700.0}
+        j.append("CP_DAY", asof="2026-11-25", day="2026-11-25", accounts={"hold BTCUSDT": acct}, caught_up=False)
+        j.append("CP_DAY", asof="2026-11-26", day="2026-11-26", accounts={"hold BTCUSDT": {**acct, "free_value": 99000.0}},
+                 caught_up=False)
+        page = b.build(root)
+    data = json.loads(re.search(r"<script id=data type=application/json>(.*?)</script>", page, re.S).group(1))
+    assert [x["close"] for x in data["nifty"]] == [25000.0, 25250.0] and data["nifty"][-1]["time"] == "2026-11-19"
+    assert data["paper"] == {"hold BTC": [{"time": "2026-11-25", "value": 101000.0}, {"time": "2026-11-26", "value": 99000.0}]}
+    assert "id=live-chart" in page and "id=nifty-chart" in page and "id=paper-chart" in page and "<script src=lwc.js>" in page
+    assert "wss://stream.binance.com:443" in page and "PAPER ONLY" in page and "Could not build" not in page
+
+
+def test_a_label_cannot_close_the_data_script():
+    import json
+    payload = json.dumps({"x": "</script><script>alert(1)</script>"}).replace("</", "<\\/")
+    assert "</script>" not in payload and json.loads(payload)["x"].startswith("</script>")
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

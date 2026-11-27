@@ -31,8 +31,8 @@ document is out of date.
 Agreed with the holder: several markets (India and crypto first, then the US and others), many strategies on
 paper, a news lab, the holder's own daily view scored beside the machine's, and one private dashboard.
 The plan: `research/BLUEPRINT.md`. Built so far: the dashboard (`dashboard/build.py`, served by
-`deploy/dashboard.sh` on the holder's private Tailscale network only), with a themes section from 27 Nov (sectors and themes over 1, 3 and 12
-months, `dashboard/themes.py`).
+`deploy/dashboard.sh` on the holder's private Tailscale network only), with a themes section and, from 27 Nov, a live-terminal look (live crypto
+prices and charts on the phone, a sector heatmap, NIFTY candles; `dashboard/themes.py`, `dashboard/live.js`).
 
 ## The market brain (from 12 Nov 2026)
 

@@ -156,9 +156,13 @@ def section(root: Path) -> list[str]:
     if trended:
         up = sum(r["above200"] for r in trended)
         out.append(f"<p>{up} of {len(trended)} sectors are above their 200-day average.</p>")
-    out.append("<h3>The broad market</h3>" + table(g["broad"]))
-    out.append("<h3>Sectors</h3>" + table(by_strength(g["sectors"])))
-    out.append("<h3>Themes</h3>" + table(by_strength(g["themes"])))
+    out.append("<div class=keys><button class=heat-key data-key=rel3M>vs NIFTY, 3M</button><button class=heat-key data-key=1M>1M"
+               "</button><button class=heat-key data-key=3M>3M</button><button class=heat-key data-key=12M>12M</button></div>"
+               "<div id=heat></div>")
+    out.append("<details><summary>The full tables</summary>"
+               "<h3>The broad market</h3>" + table(g["broad"])
+               + "<h3>Sectors</h3>" + table(by_strength(g["sectors"]))
+               + "<h3>Themes</h3>" + table(by_strength(g["themes"])) + "</details>")
     coins = coin_rows(root)
     if coins:
         out.append(f"<h3>Crypto</h3><p class=muted>Daily closes (UTC) to {coins[0]['asof']:%d %b %Y}; 1M, 3M and 12M are "

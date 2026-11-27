@@ -157,7 +157,9 @@ def crypto_paper(root: Path) -> list[str]:
         + (f"<td class='num {'up' if r['spec'] > paper.CAPITAL else 'down' if r['spec'] < paper.CAPITAL else ''}'>₹{r['spec']:,.0f}</td>"
            if r.get("spec") is not None else "<td class=muted>–</td>") + "</tr>"
         for r in sorted(rows, key=lambda r: (r["coin"], r["rule"] != "hold", r["rule"])))
-    return [f"<p class=muted>Each account began with ₹{paper.CAPITAL:,.0f} on {esc(rows[0]['since'])}; last day "
+    return ["<div class=chart-box><div class=chart-title>Each account's worth, no-tax ledger, ₹</div>"
+            "<div id=paper-chart class=chart></div><div id=paper-legend></div></div>",
+            f"<p class=muted>Each account began with ₹{paper.CAPITAL:,.0f} on {esc(rows[0]['since'])}; last day "
             f"{esc(rows[0]['day'])} ({rows[0]['days']} days). Paper only.</p>",
             "<table><tr><th>Rule</th><th>Now</th><th>No tax</th><th>VDA tax</th><th>As business</th></tr>" + body + "</table>",
             "<p class=muted>“hold” is the benchmark. ma50 and mom30 beat it on both coins with no tax in 2018–2024; "
@@ -235,25 +237,131 @@ def health(root: Path) -> list[str]:
     return ["<table>" + "".join(rows) + "</table>"]
 
 
+def live(root: Path) -> list[str]:
+    ticks = "".join(f"<button class=tick data-sym={sym}><b>{sym[:-4]}</b><span class=px>—</span><span class=ch></span></button>"
+                    for sym in ("BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT"))
+    return [f"<div class=ticker>{ticks}</div>",
+            "<div class=chart-box><div class=chart-title>BTC / USDT · 1-minute candles</div><div id=live-chart class=chart></div></div>",
+            "<p id=live-note class=muted>Real prices from Binance's free public feed, straight to this phone, tick by tick. "
+            "Tap a coin for its chart. Prices only: nothing is traded.</p>"]
+
+
+def nifty(root: Path) -> list[str]:
+    return (["<div class=chart-box><div class=chart-title>NIFTY 50 · daily candles, last 6 months</div>"
+             "<div id=nifty-chart class=chart></div></div>"] + market(root)
+            + ["<p class=muted>Indian prices here are end of day, from NSE's own file. Live Indian prices need the "
+               "day's Kite login.</p>"])
+
+
+def nifty_bars(root: Path, n: int = 130) -> list[dict]:
+    from brain import data
+    files = data._files("index_close", root / "state" / "nse_archive", root / "state" / "market_context" / "raw")
+    out = []
+    for d in list(files)[-n:]:
+        b = data.parse_index_file(files[d].read_bytes()).get("nifty 50")
+        if b:
+            c = b.close
+            out.append({"time": d.isoformat(), "open": b.open or c, "high": max(b.high or c, c), "low": min(b.low or c, c),
+                        "close": c})
+    return out
+
+
+def paper_series(root: Path) -> dict[str, list[dict]]:
+    """Each crypto paper account's worth (no-tax ledger) at each day's close."""
+    recs = records(root / "state" / "crypto" / "paper" / "journal.jsonl", "crypto-paper")
+    out: dict[str, list[dict]] = {}
+    for r in recs:
+        if r["type"] != "CP_DAY":
+            continue
+        for key, a in r["payload"]["accounts"].items():
+            rule, coin = key.split(" ")
+            out.setdefault(f"{rule} {coin[:-4]}", []).append({"time": r["payload"]["day"], "value": round(a["free_value"], 2)})
+    return out
+
+
+def crypto_last(root: Path) -> list[dict]:
+    """The server's last recorded minute per coin, and the last daily close as its reference."""
+    from crypto import store
+    out = []
+    for sym in ("BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT"):
+        years = sorted((root / "state" / "crypto" / "klines" / sym / "1d").glob("*.csv.gz"))
+        daily = store._read(years[-1]) if years else {}
+        if not daily:
+            continue
+        ref = daily[max(daily)].close
+        price = ref
+        files = sorted((root / "state" / "crypto" / "live" / sym).glob("*.csv"))
+        if files:
+            tail = files[-1].read_text().strip().splitlines()
+            if len(tail) > 1:
+                price = float(tail[-1].split(",")[4])
+        out.append({"sym": sym, "price": price, "open": ref})
+    return out
+
+
+def page_data(root: Path) -> dict:
+    from dashboard import themes
+    out: dict = {"built": datetime.now().isoformat(timespec="seconds")}
+    for key, fn in (("nifty", nifty_bars), ("paper", paper_series), ("crypto_last", crypto_last)):
+        try:
+            out[key] = fn(root)
+        except Exception:                                       # noqa: BLE001 - a missing chart must not break the page
+            out[key] = [] if key != "paper" else {}
+    try:
+        _, g = themes.rows(root)
+        out["themes"] = [{k: r.get(k) for k in ("label", "1M", "3M", "12M", "rel3M")} for r in g["sectors"] + g["themes"]]
+    except Exception:                                           # noqa: BLE001
+        out["themes"] = []
+    return out
+
+
 CSS = """
-:root{--bg:#f7f7f5;--card:#fff;--ink:#1d1d1b;--muted:#6b6b66;--line:#e4e4df;--up:#1a7f37;--down:#c0392b;--accent:#2f5d8a}
-@media (prefers-color-scheme:dark){:root{--bg:#141414;--card:#1e1e1e;--ink:#ececea;--muted:#9a9a94;--line:#333;--up:#4cc76a;--down:#ff6b5b;--accent:#7fb0e0}}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.45 system-ui,-apple-system,Segoe UI,sans-serif}
-header{padding:20px 16px 8px;max-width:760px;margin:auto}h1{font-size:20px;margin:0}header p{margin:4px 0 0;color:var(--muted);font-size:13px}
-main{max-width:760px;margin:auto;padding:0 16px 32px}section{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px;margin:12px 0}
-h2{font-size:15px;margin:0 0 8px;color:var(--accent)}table{width:100%;border-collapse:collapse}td,th{padding:6px 4px;border-bottom:1px solid var(--line);text-align:left;font-size:14px}
-th{color:var(--muted);font-weight:500}.num{text-align:right;font-variant-numeric:tabular-nums}.up{color:var(--up)}.down{color:var(--down)}
-.muted{color:var(--muted);font-size:13px}code{font-size:12px}ul.log{padding-left:18px;margin:0}ul.log li{margin:0 0 10px}
-h3{font-size:14px;margin:14px 0 4px}.wide{overflow-x:auto}table.tight td,table.tight th{font-size:12.5px;padding:5px 2px;white-space:nowrap}
-table.tight td:first-child{white-space:normal}
-@media (max-width:520px){.opt{display:none}}
+:root{color-scheme:dark;--bg:#070a10;--card:#0e131c;--card2:#121926;--ink:#e8edf5;--muted:#7f8a9c;--line:#1c2433;
+--up:#16c784;--down:#ea3943;--accent:#4da3ff;--mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 system-ui,-apple-system,Segoe UI,sans-serif}
+header{position:sticky;top:0;z-index:5;background:rgba(7,10,16,.92);backdrop-filter:blur(8px);border-bottom:1px solid var(--line)}
+.bar{max-width:820px;margin:auto;padding:10px 14px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+h1{font-size:15px;letter-spacing:.12em;margin:0 auto 0 0;font-weight:700}h1 span{color:var(--accent)}
+#clock{font:600 13px var(--mono);color:var(--ink)}
+.chip{font:600 11px var(--mono);padding:3px 8px;border-radius:999px;border:1px solid var(--line);color:var(--muted);letter-spacing:.04em}
+.chip.live{color:var(--up);border-color:rgba(22,199,132,.45)}.chip.live:before{content:"";display:inline-block;width:7px;height:7px;
+border-radius:50%;background:var(--up);margin-right:6px;animation:pulse 1.4s infinite}
+.chip.wait{color:#f5a623;border-color:rgba(245,166,35,.4)}.chip.off{color:var(--down);border-color:rgba(234,57,67,.45)}
+@keyframes pulse{0%{box-shadow:0 0 0 0 rgba(22,199,132,.7)}70%{box-shadow:0 0 0 7px rgba(22,199,132,0)}100%{box-shadow:0 0 0 0 rgba(22,199,132,0)}}
+main{max-width:820px;margin:auto;padding:4px 12px 40px}
+section{background:linear-gradient(180deg,var(--card2),var(--card));border:1px solid var(--line);border-radius:12px;padding:12px 14px;margin:12px 0}
+h2{font-size:12px;margin:0 0 10px;color:var(--muted);text-transform:uppercase;letter-spacing:.1em;font-weight:600}
+h3{font-size:13px;margin:14px 0 4px;color:var(--ink)}
+table{width:100%;border-collapse:collapse}td,th{padding:6px 4px;border-bottom:1px solid var(--line);text-align:left;font-size:13px}
+th{color:var(--muted);font-weight:500;font-size:12px}.num{text-align:right;font:13px var(--mono);font-variant-numeric:tabular-nums}
+.up{color:var(--up)}.down{color:var(--down)}.muted{color:var(--muted);font-size:12px}code{font-size:12px}
+ul.log{padding-left:18px;margin:0}ul.log li{margin:0 0 10px}
+.wide{overflow-x:auto}table.tight td,table.tight th{font-size:12px;padding:5px 2px;white-space:nowrap}
+table.tight td:first-child{white-space:normal}@media (max-width:520px){.opt{display:none}}
+.ticker{display:flex;gap:8px;overflow-x:auto;padding-bottom:4px;scrollbar-width:none}.ticker::-webkit-scrollbar{display:none}
+.tick{flex:0 0 auto;min-width:112px;text-align:left;background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:8px 10px;
+color:var(--ink);display:flex;flex-direction:column;gap:2px;font:inherit;cursor:pointer;transition:background .6s}
+.tick.on{border-color:var(--accent)}.tick b{font-size:12px;color:var(--muted)}.tick .px{font:600 15px var(--mono)}.tick .ch{font:12px var(--mono)}
+.flash-up{animation:fu .8s}.flash-down{animation:fd .8s}
+@keyframes fu{0%{background:rgba(22,199,132,.35)}100%{background:var(--bg)}}@keyframes fd{0%{background:rgba(234,57,67,.35)}100%{background:var(--bg)}}
+.chart-box{margin:10px 0 6px;background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:8px 6px 4px}
+.chart-title{font:600 11px var(--mono);color:var(--muted);padding:0 6px 6px;letter-spacing:.03em}.chart{width:100%}
+.keys{display:flex;gap:6px;margin:4px 0 8px}.heat-key{background:var(--bg);border:1px solid var(--line);color:var(--muted);
+border-radius:999px;padding:4px 10px;font:600 11px var(--mono)}.heat-key.on{color:var(--ink);border-color:var(--accent)}
+#heat{display:grid;grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:4px}
+.tile{border-radius:6px;padding:7px 6px;min-height:52px;display:flex;flex-direction:column;justify-content:space-between}
+.tile b{font-size:11px;font-weight:600;line-height:1.2;color:#fff}.tile span{font:600 12px var(--mono);color:#fff}
+details{margin-top:10px}summary{cursor:pointer;color:var(--accent);font-size:13px}
+#paper-legend{display:flex;flex-wrap:wrap;gap:4px 12px;font-size:11px;color:var(--muted);padding:4px 6px}
+#paper-legend i{display:inline-block;width:10px;height:3px;margin-right:5px;vertical-align:middle;border-radius:2px}
 """
 
 
 def build(root: Path = ROOT) -> str:
+    import json
     from dashboard import themes
-    sections = [("The market", market), ("Themes: which sectors are moving", themes.section),
-                ("The brain: tomorrow, and its score", brain), ("Crypto", crypto),
+    sections = [("Live crypto", live), ("NIFTY 50 and the market", nifty), ("Themes: which sectors are moving", themes.section),
+                ("The brain: tomorrow, and its score", brain), ("Crypto: the server's record and the crypto brain", crypto),
                 ("Crypto paper book", crypto_paper),
                 ("Paper books", books),
                 ("Latest research findings", findings), ("Data health", health)]
@@ -264,11 +372,17 @@ def build(root: Path = ROOT) -> str:
         except Exception as exc:                                # noqa: BLE001 - one broken section must not hide the rest
             inner = f"<p class=muted>Could not build this section: {esc(type(exc).__name__)}: {esc(str(exc)[:120])}</p>"
         body.append(f"<section><h2>{esc(title)}</h2>{inner}</section>")
+    data = json.dumps(page_data(root), separators=(",", ":")).replace("</", "<\\/")
+    script = (Path(__file__).resolve().parent / "live.js").read_text()
     return ("<!doctype html><html lang=en><head><meta charset=utf-8>"
-            "<meta name=viewport content='width=device-width,initial-scale=1'><title>Market Lab</title>"
-            f"<style>{CSS}</style></head><body><header><h1>Market Lab</h1>"
-            f"<p>Built {datetime.now():%d %b %Y, %H:%M}. Read-only. Paper only: no real money is traded.</p></header>"
-            f"<main>{''.join(body)}</main></body></html>")
+            "<meta name=viewport content='width=device-width,initial-scale=1'><meta name=theme-color content='#070a10'>"
+            f"<title>Market Lab</title><style>{CSS}</style></head><body><header><div class=bar>"
+            "<h1>MARKET<span>LAB</span></h1><span id=live-status class='chip wait'>connecting</span>"
+            "<span class=chip>PAPER ONLY</span><span id=clock></span></div></header>"
+            f"<main>{''.join(body)}<p class=muted>Built {datetime.now():%d %b %Y, %H:%M} from the server's records. "
+            "Read-only: no real money is traded. Charts by TradingView Lightweight Charts.</p></main>"
+            f"<script id=data type=application/json>{data}</script><script src=lwc.js></script><script>{script}</script>"
+            "</body></html>")
 
 
 def main() -> int:
@@ -276,6 +390,9 @@ def main() -> int:
     tmp = OUT.with_suffix(".tmp")
     tmp.write_text(build())
     os.replace(tmp, OUT)
+    lib = Path(__file__).resolve().parent / "vendor" / "lightweight-charts-4.2.0.js"
+    if lib.exists():
+        shutil.copyfile(lib, OUT.parent / "lwc.js")
     print(f"dashboard built: {OUT}")
     return 0
 
