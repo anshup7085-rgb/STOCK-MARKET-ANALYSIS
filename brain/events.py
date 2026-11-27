@@ -6,8 +6,8 @@ Two kinds of event:
 
   dated      data/events.csv: central-bank decisions, inflation releases, the budget, rule changes, and the
              project's own deadlines. Every row names its source and a status: confirmed (an official
-             schedule), expected (a custom or a schedule that may be revised), to-check (reported, not yet
-             read in the official circular), lab (our own reminder). Times are kept in the event's own
+             schedule), expected (a custom or a schedule that may be revised), reported (consistent secondary
+             reports, the original not yet read), to-check (a single report, unchecked), lab (our own reminder). Times are kept in the event's own
              time zone and shown in IST, so summer time abroad is handled.
   computed   NSE's index F&O expiries (NIFTY weekly on Tuesday, the monthly on the last Tuesday; BSE's
              SENSEX weekly on Thursday: the rule since 1 Sep 2025), moved to the previous trading day when

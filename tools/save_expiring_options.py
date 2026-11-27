@@ -8,7 +8,8 @@ saves the whole history (from listing) of each NIFTY contract expiring in the ne
 The run on expiry day itself captures the complete life of that week's contracts. Over time
 this becomes our own minute-level option history, and the yardstick for any bought data.
 
-    `morning` starts it in the background with the day's login; it waits until 15:40 IST.
+    `morning` starts it in the background with the day's login; it waits until 15:50 IST, after the F&O
+    close (15:40 since 3 Aug 2026 and, as reported, 15:45 from 7 Dec 2026; research/RULES_2026-12.md).
     PYTHONPATH=. python tools/save_expiring_options.py --now     # run at once (needs the login)
 
 Read-only. It never touches an order endpoint. Files: state/option_minutes/EXPIRY/SYMBOL.csv.gz
@@ -35,7 +36,8 @@ from market.config import IST
 
 REPO = Path(__file__).resolve().parents[1]
 ROOT = REPO / "state" / "option_minutes"
-START, PAUSE_FROM, RESUME_AT = dtime(15, 40), dtime(15, 58), dtime(17, 20)
+START, PAUSE_FROM, RESUME_AT = dtime(15, 50), dtime(15, 58), dtime(17, 20)
+DAY_END = "15:59:00"            # asks for every minute of the day: the F&O close moved past 15:30 in Aug 2026
 GAP_S = 0.5                      # about 2 requests a second; Kite allows 3 on the historical API
 BAND = 0.15                      # strikes within 15% of NIFTY
 WINDOW_DAYS, MAX_BACK_DAYS = 59, 400
@@ -64,7 +66,7 @@ def history(kite, token: int, today: date, sleep) -> list[dict]:
     while (today - end).days < MAX_BACK_DAYS:
         start = end - timedelta(days=WINDOW_DAYS)
         sleep(GAP_S)
-        rows = kite.historical_data(token, f"{start} 09:00:00", f"{end} 15:30:00", "minute", oi=True)
+        rows = kite.historical_data(token, f"{start} 09:00:00", f"{end} {DAY_END}", "minute", oi=True)
         if not rows:
             break
         out = list(rows) + out

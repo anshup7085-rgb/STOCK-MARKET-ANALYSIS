@@ -58,7 +58,7 @@ useful, not yet · **SKIP** not worth it.
 - F&O profit is business income (ITR-3): a chartered accountant once real money starts.
 - **Futures cost more than options per point since April 2026.** A NIFTY futures lot's round trip is about 7.4 index bps (STT 0.05% of the value is most of it); the same exposure through an at-the-money option is about 1.4 bps before theta. Short directional trades should be priced both ways before any is chosen.
 - SEBI keeps changing F&O rules (expiry days, lot sizes, margins): every change goes into the events log.
-- **Reported, to check against the circular before 7 Dec 2026:** from that day expiring contracts settle on the volume-weighted price of the last 30 minutes, with a change to the last trading minutes on expiry day (SEBI circular of 15 Oct 2026, as secondary sources report it). It touches V's settlement and every expiry-day idea.
+- **The 7 Dec 2026 rule change, checked 27 Nov** (`research/RULES_2026-12.md`): NSE's own circulars confirm the closing auction (live 3 Aug 2026) and the F&O pre-open change (7 Sep 2026); several reports of SEBI's 15 Oct review and NSE's 6 Nov circulars agree that from 7 Dec expiring index options settle on the index built from its stocks' 15:00-15:30 VWAP and F&O trades until 15:45 (originals not yet read: SEBI's site refuses this workspace). Our settlement reads NSE's own price, so it needs no change; the option-minute saver did (fixed); 3 Aug to 4 Dec 2026 is a different settlement regime for any test.
 - **Kite Connect's ₹500 a month is ₹6,000 a year.** Paper research on downloaded history does not need it every month (`research/AUDIT_2026-11-10.md`, section 3).
 
 ## 5. Knowledge

@@ -17,6 +17,7 @@ when,tz,market,event,importance,status,source
 2027-02-12 16:00,Asia/Kolkata,IN,India inflation (CPI for January),medium,expected,"MoSPI advance release calendar 2026-27 (March 2026 version): check the latest; 16:00 is the usual hour, unchecked"
 2027-03-12 16:00,Asia/Kolkata,IN,India inflation (CPI for February),medium,expected,"MoSPI advance release calendar 2026-27 (March 2026 version): check the latest; 16:00 is the usual hour, unchecked"
 2027-02-01 11:00,Asia/Kolkata,IN,Union Budget 2027-28,high,expected,"1 February by custom since 2017; the date was not yet announced on 27 Nov 2026"
-2026-12-07,Asia/Kolkata,IN,"Expiring F&O contracts to settle on the last 30 minutes' average price (VWAP)",high,to-check,"reported in research/AUDIT_2026-11-10.md; not yet checked against the SEBI or NSE circular"
+2026-12-07,Asia/Kolkata,IN,"New closing rules: expiring index F&O settles on the index from its stocks' 15:00-15:30 VWAP; F&O trades until 15:45; closing auction 15:30-15:40",high,reported,"SEBI review of 15 Oct 2026 and NSE circulars of 6 Nov 2026, as several press reports agree; the originals not yet read (research/RULES_2026-12.md)"
 2026-12-04,Asia/Kolkata,LAB,Dhan data plan renews: turn its auto-renewal off before this,medium,lab,"the project's own reminder (research/OPPORTUNITY_MAP.md)"
 2026-12-05,Asia/Kolkata,LAB,"Decision day on the F&O tests (momentum, the opening gap, the expiry effect)",medium,lab,"research/AUDIT_2026-11-10.md: finish the tests by 4 Dec, then decide once, on the evidence"
+2027-02-08,Asia/Kolkata,IN,"Closing-auction order-handling provisions (unexecuted limit and iceberg orders) take effect",low,reported,"NSE circulars of 6 Nov 2026, as press reports say (research/RULES_2026-12.md)"

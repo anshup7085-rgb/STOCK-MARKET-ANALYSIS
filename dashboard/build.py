@@ -277,7 +277,7 @@ def events_section(root: Path) -> list[str]:
         return ["<p class=muted>Nothing in the next three weeks.</p>"]
     return ["<table class=ev><tr><th class=num>When (IST)</th><th>Where</th><th>What</th></tr>" + "".join(rows) + "</table>",
             "<p class=muted>From <code>data/events.csv</code> (each row names its source; <i>expected</i> may still move, "
-            "<i>to-check</i> is not yet read in the circular) and computed expiries and holidays. NSE's 2027 holidays are not "
+            "<i>reported</i> and <i>to-check</i> are not yet read in the original) and computed expiries and holidays. NSE's 2027 holidays are not "
             "published yet.</p>"]
 
 

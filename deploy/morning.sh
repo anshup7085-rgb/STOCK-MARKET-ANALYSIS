@@ -28,7 +28,7 @@ main() {   # parsed whole before it runs, so the pull below cannot change it mid
   env -u KITE_ACCESS_TOKEN -u KITE_API_KEY PYTHONPATH=. setsid nohup timeout 300 \
     .venv/bin/python tools/record_context.py >>"logs/context-$(date +%F).log" 2>&1 </dev/null &
   # After the close: save the minute history of every NIFTY contract expiring within 7 days,
-  # before Kite drops it at expiry (read-only; waits until 15:40, done before V's 16:00 pass).
+  # before Kite drops it at expiry (read-only; waits until 15:50, after the F&O close; done before V's 16:00 pass).
   PYTHONPATH=. setsid nohup timeout 43200 .venv/bin/python -u tools/save_expiring_options.py \
     >>"logs/options-save-$(date +%F).log" 2>&1 </dev/null &
   # NIFTY 50 and INDIA VIX minute candles since 2015 (read-only): the first run fetches about eleven

@@ -68,6 +68,9 @@ Nothing has a measured edge. The correct trading output today is **NO TRADE**.
    ask whether policy and expiry days behave differently. The **human desk** is live on the dashboard: write a view
    before 09:15 IST, scored each evening beside the brain.
 5. **A daily check of the simulator** against what the paper book really did.
+5a. **Rule changes:** from 7 Dec 2026 expiring index options settle on a 15:00-15:30 VWAP and F&O trades until 15:45
+   (reported; `research/RULES_2026-12.md`). Our settlement reads NSE's own price; the option saver was fixed; the live
+   path's close time must follow 15:45 before any live use. SEBI's and NSE's originals are still to be read.
 6. **The live order path** only after something passes: today `trading/fno/` cannot place an order.
 
 **Can this reach the goal at all?** The audit of 10 Nov (`research/AUDIT_2026-11-10.md`) was written for
